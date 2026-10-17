@@ -110,10 +110,36 @@ function snapshot(hwnd) {
   return request(hwnd ? { cmd: 'snapshot', hwnd } : { cmd: 'snapshot' });
 }
 
+const APP_NAMES = {
+  code: 'VS Code', chrome: 'Chrome', msedge: 'Edge', firefox: 'Firefox', brave: 'Brave', explorer: 'File Explorer',
+  notepad: 'Notepad', pycharm64: 'PyCharm', pycharm: 'PyCharm', idea64: 'IntelliJ IDEA', winword: 'Word',
+  excel: 'Excel', powerpnt: 'PowerPoint', outlook: 'Outlook', olk: 'Outlook', windowsterminal: 'Terminal',
+  cmd: 'Command Prompt', powershell: 'PowerShell', slack: 'Slack', discord: 'Discord', spotify: 'Spotify',
+  teams: 'Teams', 'ms-teams': 'Teams', figma: 'Figma', devenv: 'Visual Studio', systemsettings: 'Settings',
+  applicationframehost: '', // hosts Store apps: the window title names the real app
+};
+
+// A name people recognise ("PyCharm", "Chrome") instead of a process name ("pycharm64").
+function appName(window) {
+  const process = String(window.process || '').toLowerCase();
+  const title = String(window.title || '').trim();
+  // explorer.exe also runs the taskbar (no title) and the desktop ("Program Manager").
+  if (process === 'explorer' && !title) return 'the taskbar';
+  if (process === 'explorer' && title === 'Program Manager') return 'your desktop';
+  const known = APP_NAMES[process];
+  if (known) return known;
+  if (title) {
+    const parts = title.split(/\s[-–—|]\s/); // "notes.txt - Notepad" -> "Notepad"
+    return parts[parts.length - 1].trim();
+  }
+  if (process) return process.charAt(0).toUpperCase() + process.slice(1);
+  return 'this app';
+}
+
 function stop() {
   if (child) child.kill();
   child = null;
   ready = null;
 }
 
-module.exports = { start, snapshot, stop };
+module.exports = { start, snapshot, appName, stop };
