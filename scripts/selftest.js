@@ -125,6 +125,41 @@ async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarge
     check(/What next/.test(await waitForMessage(/What next/, 'the chat to come back')), 'then the chat comes back, ready for the next goal');
     check(!(await bubbleTucked()), 'bubble is back after the goal');
 
+    // Click guard: give Lefty a screen with risky buttons and rest the mouse on them.
+    const seq = await js('currentSeq');
+    const at = (dx, dy, w, h) => ({ x: origin.x + dx, y: origin.y + dy, w, h });
+    const fake = [
+      { name: 'Delete', type: 'Button', enabled: true, rect: at(200, 200, 80, 30) },
+      { name: 'Save', type: 'Button', enabled: true, rect: at(300, 200, 80, 30) },
+      { name: 'Empty Recycle Bin', type: 'MenuItem', enabled: true, rect: at(400, 200, 160, 30) },
+    ];
+    overlayWindow.webContents.send('lefty:context', { seq, ok: true, app: 'Guard test', elements: fake });
+    await sleep(150);
+    const hover = (rect) => js(`document.dispatchEvent(new MouseEvent('mousemove', { clientX: ${rect.x - origin.x + rect.w / 2}, clientY: ${rect.y - origin.y + rect.h / 2}, bubbles: true })); true`);
+    const guardState = () => js(`(() => {
+      const tag = document.getElementById('guard-tag');
+      const ringEl = document.getElementById('guard-ring');
+      return { show: tag.classList.contains('show'), high: tag.classList.contains('high'), text: tag.textContent,
+               ring: { x: parseFloat(ringEl.style.left), y: parseFloat(ringEl.style.top) } };
+    })()`);
+
+    await hover(fake[0].rect);
+    let guard = await waitFor(guardState, (s) => s.show, 2000, 'the guard on Delete');
+    check(/Delete/.test(guard.text) && !guard.high, `resting on "Delete" flags it in amber: "${guard.text}"`);
+    check(near(guard.ring.x, fake[0].rect.x - origin.x - 3) && near(guard.ring.y, fake[0].rect.y - origin.y - 3), 'the guard ring sits on Delete');
+
+    await hover(fake[1].rect);
+    await waitFor(guardState, (s) => !s.show, 2000, 'the guard to clear on Save');
+    check(true, 'moving to "Save" clears the warning');
+
+    await hover(fake[2].rect);
+    guard = await waitFor(guardState, (s) => s.show, 2000, 'the guard on Empty Recycle Bin');
+    check(guard.high && /can't be undone/.test(guard.text), `"Empty Recycle Bin" gets the red warning: "${guard.text}"`);
+
+    await hover(at(5, 700, 1, 1));
+    await waitFor(guardState, (s) => !s.show, 2000, 'the guard to clear in empty space');
+    check(true, 'empty space clears the warning');
+
     console.log('[selftest] All Ctrl+Space checks passed.');
     app.exit(0);
   } catch (error) {
