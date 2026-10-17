@@ -1,13 +1,8 @@
 // Checks Lefty's eyes without opening or focusing any window: reads the Windows taskbar.
 // Run: npm run test:eyes
 
-const { execFileSync } = require('child_process');
 const eyes = require('../src/eyes');
-
-function taskbarHandle() {
-  const script = 'Add-Type -Namespace W -Name U -MemberDefinition \'[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern System.IntPtr FindWindow(string c, string t);\'; [W.U]::FindWindow("Shell_TrayWnd", $null).ToInt64()';
-  return Number(execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }).toString().trim());
-}
+const { taskbarHandle } = require('./taskbar');
 
 function check(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`);
