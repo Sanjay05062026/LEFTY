@@ -1,6 +1,6 @@
 // Checks that Lefty picks the right element for what the user typed. Run: npm run test:match
 
-const { findTarget } = require('../src/overlay/match');
+const { findTarget, parsePlan, isStuck } = require('../src/overlay/match');
 
 const el = (name, type = 'Button', enabled = true) => ({ name, type, enabled, rect: { x: 0, y: 0, w: 10, h: 10 } });
 const screen = [
@@ -36,5 +36,30 @@ for (const [goal, expectedName, expectedType] of cases) {
   if (!ok) failed += 1;
   console.log(`${ok ? 'ok  ' : 'FAIL'} "${goal}" -> ${found ? `${found.type} "${found.name}"` : 'nothing'}`);
 }
+const plans = [
+  ['File > Save as', ['File', 'Save as']],
+  ['click file then save as', ['click file', 'save as']],
+  ['file -> edit → view', ['file', 'edit', 'view']],
+  ['open settings and then privacy', ['open settings', 'privacy']],
+  ['Create a JSON file', ['Create a JSON file']],
+  ['Theme, then dark', ['Theme', 'dark']],
+  ['view, and then zoom', ['view', 'zoom']],
+  ['  save  ', ['save']],
+  ['> >', []],
+];
+for (const [goal, expected] of plans) {
+  const steps = parsePlan(goal);
+  const ok = JSON.stringify(steps) === JSON.stringify(expected);
+  if (!ok) failed += 1;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} plan "${goal}" -> ${JSON.stringify(steps)}`);
+}
+
+const stuck = [["I'm stuck, what do I do next?", true], ['what next', true], ['help me', true], ['save', false], ['Create a JSON file', false]];
+for (const [goal, expected] of stuck) {
+  const ok = isStuck(goal) === expected;
+  if (!ok) failed += 1;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} stuck? "${goal}" -> ${isStuck(goal)}`);
+}
+
 console.log(failed ? `\n${failed} match checks failed.` : '\nAll match checks passed.');
 process.exitCode = failed ? 1 : 0;
