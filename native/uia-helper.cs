@@ -56,6 +56,7 @@ static class UiaHelper
         { 50007, "ListItem" }, { 50024, "TreeItem" }, { 50005, "Hyperlink" }, { 50002, "CheckBox" },
         { 50013, "RadioButton" }, { 50003, "ComboBox" }, { 50004, "Edit" }, { 50015, "Slider" },
         { 50029, "DataItem" }, { 50035, "HeaderItem" }, { 50016, "Spinner" }, { 50030, "Document" },
+        { 50023, "Tree" }, // e.g. a file dialog's folder pane, which Lefty rings for "pick any folder"
     };
 
     // Windows' own passing screens: they become "foreground" for a moment while the user switches apps
