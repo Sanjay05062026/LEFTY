@@ -5,7 +5,8 @@
   "main": "src/main.js",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test:eyes": "node scripts/test-eyes.js"
   },
   "devDependencies": {
     "electron": "33.2.1"
