@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -6 74 104" width="74" height="104">
+  <!-- Lefty's look lives entirely in this file. Swap it to redesign Lefty everywhere.
+       Keep the pointer tip at (0,0) so on-screen pointing stays accurate. -->
+  <style>
+    .eye { transform-box: fill-box; transform-origin: center; animation: blink 4.5s infinite; }
+    @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+  </style>
+  <path d="M0 0 L0 80 L19 63 L31 90 L46 84 L34 57 L60 55 Z" fill="#2DD4BF" stroke="#1E293B" stroke-width="5" stroke-linejoin="round"/>
+  <g class="eye">
+    <circle cx="12" cy="40" r="7.5" fill="#FFFFFF"/>
+    <circle cx="13.5" cy="41.5" r="4.5" fill="#1E293B"/>
+    <circle cx="15" cy="39.5" r="1.6" fill="#FFFFFF"/>
+  </g>
+  <g class="eye">
+    <circle cx="29" cy="42" r="7.5" fill="#FFFFFF"/>
+    <circle cx="30.5" cy="43.5" r="4.5" fill="#1E293B"/>
+    <circle cx="32" cy="41.5" r="1.6" fill="#FFFFFF"/>
+  </g>
+  <ellipse cx="7" cy="54" rx="5" ry="3" fill="#FB7185"/>
+  <ellipse cx="38" cy="56" rx="5" ry="3" fill="#FB7185"/>
+  <path d="M15 55 Q21 61 27 56" fill="none" stroke="#1E293B" stroke-width="3" stroke-linecap="round"/>
+</svg>

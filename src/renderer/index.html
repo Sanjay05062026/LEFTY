@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'">
+  <title>Lefty</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ===== Login / sign up ===== -->
+  <main id="view-login" class="view auth">
+    <section class="auth-card">
+      <img src="../../assets/lefty.svg" class="auth-logo" alt="Lefty">
+      <h1 id="auth-title">Welcome back</h1>
+      <p class="muted" id="auth-sub">Log in to Lefty to continue</p>
+
+      <div class="social">
+        <button class="btn-outline" type="button" data-social="Google">
+          <span class="g-mark">G</span> Continue with Google
+        </button>
+        <button class="btn-outline" type="button" data-social="Microsoft">
+          <span class="ms-mark"><i></i><i></i><i></i><i></i></span> Continue with Microsoft
+        </button>
+      </div>
+
+      <div class="divider"><span>OR</span></div>
+
+      <form id="auth-form" novalidate>
+        <label class="field" id="name-field" hidden>
+          <span>Name</span>
+          <input id="name" autocomplete="name" placeholder="What should Lefty call you?">
+        </label>
+        <label class="field">
+          <span>Email address</span>
+          <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input id="password" type="password" autocomplete="current-password" placeholder="At least 6 characters">
+        </label>
+        <p class="error" id="auth-error" role="alert"></p>
+        <button class="btn-primary wide" id="auth-submit" type="submit">Continue</button>
+      </form>
+
+      <p class="switch">
+        <span id="switch-text">Don't have an account?</span>
+        <button class="link" id="switch-mode" type="button">Sign up</button>
+      </p>
+    </section>
+    <p class="foot muted">Demo build · accounts are not connected to a server yet</p>
+  </main>
+
+  <!-- ===== Permissions ===== -->
+  <main id="view-permissions" class="view perms" hidden>
+    <section class="perms-card">
+      <div class="perms-head">
+        <img src="../../assets/lefty.svg" class="perms-logo" alt="">
+        <div>
+          <p class="eyebrow" id="perms-eyebrow">Almost there</p>
+          <h1>Give Lefty access</h1>
+          <p class="muted">Lefty needs a few permissions to see your screen and point you in the right direction.</p>
+        </div>
+      </div>
+
+      <ul class="perm-list">
+        <li class="perm" data-perm="screen" data-required>
+          <span class="perm-icon">🖥️</span>
+          <div class="perm-text">
+            <h3>Screen capture <span class="tag">Required</span></h3>
+            <p>See what's on your screen when you call Lefty.</p>
+          </div>
+          <button class="btn-allow" type="button">Allow</button>
+        </li>
+        <li class="perm" data-perm="uia" data-required>
+          <span class="perm-icon">🔎</span>
+          <div class="perm-text">
+            <h3>Screen reading <span class="tag">Required</span></h3>
+            <p>Read buttons and menus so Lefty can point at exactly the right spot.</p>
+          </div>
+          <button class="btn-allow" type="button">Allow</button>
+        </li>
+        <li class="perm" data-perm="shortcut" data-required>
+          <span class="perm-icon">⌨️</span>
+          <div class="perm-text">
+            <h3>Global shortcut <span class="tag">Required</span></h3>
+            <p>Call Lefty from any app with <b>Ctrl + Space</b>.</p>
+          </div>
+          <button class="btn-allow" type="button">Allow</button>
+        </li>
+        <li class="perm" data-perm="mic">
+          <span class="perm-icon">🎙️</span>
+          <div class="perm-text">
+            <h3>Microphone <span class="tag optional">Optional</span></h3>
+            <p>Ask Lefty with your voice in English, Tamil or Hindi.</p>
+          </div>
+          <button class="btn-allow" type="button">Allow</button>
+        </li>
+      </ul>
+
+      <div class="privacy">🔒 Lefty only looks at your screen when you call it. Password fields stay hidden, and Lefty never clicks for you.</div>
+
+      <div class="perms-actions">
+        <button class="btn-ghost" id="perm-all" type="button">Allow all</button>
+        <button class="btn-primary" id="perm-continue" type="button" disabled>Continue</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Home ===== -->
+  <div id="view-home" class="view home" hidden>
+    <aside class="sidebar">
+      <div class="brand"><img src="../../assets/lefty.svg" alt=""><span>Lefty</span></div>
+      <button class="btn-new" id="new-goal" type="button">＋ New goal</button>
+      <p class="side-label">Recent goals</p>
+      <div class="empty-recent">No goals yet. Call Lefty to start one.</div>
+      <div class="side-bottom">
+        <button class="side-item" id="open-settings" type="button">⚙️ Permissions</button>
+        <div class="user-chip">
+          <span class="avatar" id="avatar">L</span>
+          <div class="user-meta"><strong id="user-name"></strong><small id="user-email"></small></div>
+        </div>
+        <button class="side-item" id="logout" type="button">↩ Log out</button>
+      </div>
+    </aside>
+
+    <main class="home-main">
+      <span class="status" id="shortcut-status">Shortcut active</span>
+      <img src="../../assets/lefty.svg" class="hero-lefty" alt="Lefty">
+      <h1>Hi <span id="hello-name"></span>, Lefty is ready!</h1>
+      <p class="muted lead">Press <span id="keycaps" class="keycaps"></span> in any app to call Lefty.</p>
+      <button class="btn-primary big" id="try-now" type="button">Try it now</button>
+
+      <div class="tips">
+        <div class="tip"><span>🆘</span><h3>Stuck?</h3><p>Ask "what do I do next?" and Lefty points to the next step.</p></div>
+        <div class="tip"><span>🎯</span><h3>Give a goal</h3><p>"Create a JSON file": Lefty guides you until it's done.</p></div>
+        <div class="tip"><span>👋</span><h3>Send him away</h3><p>Press Esc or the shortcut again to hide Lefty.</p></div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>

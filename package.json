@@ -1,0 +1,16 @@
+{
+  "name": "lefty",
+  "version": "0.1.0",
+  "description": "Lefty: a friendly AI cursor that points you to the next step in any app.",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "33.2.1"
+  },
+  "dependencies": {
+    "uiohook-napi": "1.5.4"
+  }
+}
