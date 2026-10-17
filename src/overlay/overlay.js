@@ -7,6 +7,7 @@ const api = window.lefty;
 const leftyEl = document.getElementById('lefty');
 const bubble = document.getElementById('bubble');
 const ring = document.getElementById('ring');
+const stepTag = document.getElementById('steptag');
 const messages = document.getElementById('messages');
 const form = document.getElementById('ask');
 const input = document.getElementById('goal');
@@ -57,7 +58,8 @@ function clampToScreen(box) {
   };
 }
 
-// Lefty's tip lands inside the target; the bubble goes wherever it covers neither the target nor Lefty.
+// Lefty's tip lands inside the target's bottom-right corner, so its label stays readable;
+// the bubble goes wherever it covers neither the target nor Lefty.
 function pointAt(target) {
   const r = {
     x: target.rect.x - screenArea.originX,
@@ -69,12 +71,12 @@ function pointAt(target) {
   setPosition(ring, r.x - RING_PAD, r.y - RING_PAD);
   ring.style.width = `${r.w + RING_PAD * 2}px`;
   ring.style.height = `${r.h + RING_PAD * 2}px`;
-  ring.classList.remove('show');
+  ring.classList.remove('show', 'hit');
   void ring.offsetWidth; // replay the entrance when pointing at a new target
   ring.classList.add('show');
 
-  const tipX = r.x + Math.min(r.w * 0.65, r.w - 4);
-  const tipY = r.y + Math.min(r.h * 0.65, r.h - 4);
+  const tipX = r.x + r.w - Math.min(10, r.w * 0.3);
+  const tipY = r.y + r.h - Math.min(8, r.h * 0.3);
   const lefty = { x: tipX - LEFTY_TIP, y: tipY - LEFTY_TIP, w: LEFTY_WIDTH, h: LEFTY_HEIGHT };
   leftyEl.classList.add('glide', 'pointing');
   bubble.classList.add('glide');
@@ -94,9 +96,55 @@ function pointAt(target) {
 }
 
 function stopPointing() {
-  ring.classList.remove('show');
+  ring.classList.remove('show', 'hit');
+  stepTag.classList.remove('show', 'glide', 'done', 'nudge');
   leftyEl.classList.remove('glide', 'pointing');
   bubble.classList.remove('glide');
+  api.setTarget(null);
+}
+
+// While guiding, the chat bubble steps aside so the screen itself shows the way.
+function tuckBubble(tucked) {
+  bubble.classList.toggle('tucked', tucked);
+  if (tucked) api.setInteractive(false); // a hidden bubble must never keep catching the user's clicks
+}
+
+// The step tag rides to the right of Lefty, or below him near the right screen edge.
+function placeStepTag() {
+  const leftyX = parseFloat(leftyEl.style.left);
+  const leftyY = parseFloat(leftyEl.style.top);
+  const w = stepTag.offsetWidth || 120;
+  const h = stepTag.offsetHeight || 30;
+  let x = leftyX + LEFTY_WIDTH - 6;
+  let y = leftyY + 34;
+  if (x + w > screenArea.width - GAP) {
+    x = leftyX + 10;
+    y = leftyY + LEFTY_HEIGHT + 4;
+  }
+  const box = clampToScreen({ x, y, w, h });
+  setPosition(stepTag, box.x, box.y);
+}
+
+function setStepTag(count, text, { done = false } = {}) {
+  stepTag.replaceChildren();
+  if (count) {
+    const counter = document.createElement('span');
+    counter.className = 'count';
+    counter.textContent = count;
+    stepTag.append(counter);
+  }
+  stepTag.append(document.createTextNode(text));
+  stepTag.classList.remove('nudge');
+  stepTag.classList.toggle('done', done);
+  stepTag.classList.add('show', 'glide');
+  placeStepTag();
+}
+
+function nudgeStepTag() {
+  stepTag.classList.remove('nudge');
+  void stepTag.offsetWidth; // replay the wiggle
+  stepTag.classList.add('nudge');
+  stepTag.dataset.nudges = String(Number(stepTag.dataset.nudges || 0) + 1);
 }
 
 function addMessage(text, from) {
@@ -116,8 +164,29 @@ function showTyping() {
   return el;
 }
 
+/* ---------- Guiding: plan -> find -> point -> check the click -> next step ----------
+   The steps come from what the user typed ("File > Save as"); later the AI brain writes them.
+   After each finished step Lefty looks at the screen again, because the step itself changes it. */
+
+// Menus and dialogs take a moment to appear after a click, so Lefty looks a few times before giving up.
+const LOOK_AGAIN_DELAYS_MS = [150, 250, 400, 600, 800, 1000];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let plan = null;        // { steps: [...], index, target, hinted }
+let planToken = 0;      // bumped whenever the plan changes, so older async work stops quietly
+let checkingMiss = false;
+
+function cancelPlan() {
+  plan = null;
+  planToken += 1;
+  checkingMiss = false;
+}
+
 function reset() {
+  cancelPlan();
   stopPointing();
+  tuckBubble(false);
+  stepTag.dataset.nudges = '0';
   messages.replaceChildren();
   greeting = addMessage("👋 Hi! What's your goal?", 'lefty');
   input.value = '';
@@ -130,40 +199,154 @@ const isOnScreen = (rect) => {
   return cx >= 0 && cy >= 0 && cx <= screenArea.width && cy <= screenArea.height;
 };
 
+const sameRect = (a, b) => ['x', 'y', 'w', 'h'].every((key) => Math.abs(a[key] - b[key]) < 1);
+
+// Ends the guide and brings the chat back with a message: used whenever the user's attention is needed.
+function stopGuide(message) {
+  cancelPlan();
+  stopPointing();
+  addMessage(message, 'lefty');
+  tuckBubble(false);
+}
+
+function point(target) {
+  if (!isOnScreen(target.rect)) {
+    stopGuide(`Found "${target.name}", but it's on your other screen. 👀`);
+    return;
+  }
+  plan.target = target;
+  pointAt(target);
+  setStepTag(plan.steps.length > 1 ? `${plan.index + 1}/${plan.steps.length}` : '', target.name || target.type);
+  api.setTarget(target.rect);
+  api.log(`step ${plan.index + 1}/${plan.steps.length}: pointing at ${target.type} "${target.name}" (${Math.round(target.rect.x)},${Math.round(target.rect.y)} ${Math.round(target.rect.w)}x${Math.round(target.rect.h)})`);
+}
+
+// Looks at the screen again until `step` shows up. Returns { target }, {} when it never appears, or { cancelled }.
+async function lookFor(steps, token) {
+  for (const delay of LOOK_AGAIN_DELAYS_MS) {
+    await sleep(delay);
+    if (token !== planToken) return { cancelled: true };
+    const seen = await api.rescan();
+    if (token !== planToken) return { cancelled: true };
+    if (!seen.ok) continue;
+    for (const [offset, step] of steps.entries()) {
+      const target = LeftyMatch.findTarget(step, seen.elements);
+      if (target) return { target, offset };
+    }
+  }
+  return {};
+}
+
 async function ask(goal) {
   addMessage(goal, 'user');
   input.value = '';
-  const seq = currentSeq;
+  cancelPlan();
+  stopPointing();
+  tuckBubble(false); // replies show in the chat; it tucks away again only if a guide starts
+  const token = planToken;
+
+  if (LeftyMatch.isStuck(goal)) {
+    addMessage("Once my brain is connected, I'll read your screen and show you the next step. 🧠 For now, name a button, or a path like File > Save as.", 'lefty');
+    return;
+  }
+  const steps = LeftyMatch.parsePlan(goal);
+  if (!steps.length) return;
+
   const typing = showTyping();
   const seen = await contextReady;
-  if (seq !== currentSeq) return; // Lefty was closed and summoned again meanwhile
   typing.remove();
+  if (token !== planToken) return; // Lefty was closed or asked something else meanwhile
 
   if (!seen.ok) {
     addMessage("I couldn't read this app's buttons, sorry. 😕 Try clicking into the app and calling me again.", 'lefty');
     return;
   }
-  const target = LeftyMatch.findTarget(goal, seen.elements);
+  const target = LeftyMatch.findTarget(steps[0], seen.elements);
   if (!target) {
-    stopPointing();
-    addMessage(`I can't spot "${goal}" on this screen. Once my brain is connected, I'll plan every step for you. 🧠`, 'lefty');
+    addMessage(steps.length === 1
+      ? `I can't spot "${goal}" on this screen. Once my brain is connected, I'll plan every step for you. 🧠`
+      : `I can't spot "${steps[0]}" on this screen. 🤔`, 'lefty');
     return;
   }
-  if (!isOnScreen(target.rect)) {
-    addMessage(`Found "${target.name}", but it's on your other screen. 👀`, 'lefty');
-    return;
-  }
-  addMessage(`Here it is! 👉 ${target.name}`, 'lefty');
-  pointAt(target);
-  api.log(`pointing at ${target.type} "${target.name}" (${Math.round(target.rect.x)},${Math.round(target.rect.y)} ${Math.round(target.rect.w)}x${Math.round(target.rect.h)})`);
+  plan = { steps, index: 0, target: null, hinted: false };
+  point(target);
+  if (!plan) return;
+  tuckBubble(true);
+  api.focusApp(); // the next move is a click in the app: many apps ignore the first click while inactive
 }
+
+function finish() {
+  api.log(`goal finished: ${plan.steps.join(' > ')}`);
+  cancelPlan();
+  api.setTarget(null);
+  setStepTag('', '🎉 Done!', { done: true });
+  const token = planToken;
+  setTimeout(() => { // let the green ring and tag show first, then the chat comes back for the next goal
+    if (token !== planToken) return;
+    stopPointing();
+    addMessage('🎉 Done! You did it. What next?', 'lefty');
+    tuckBubble(false);
+  }, 1200);
+}
+
+async function onStepDone() {
+  ring.classList.add('hit');
+  api.setTarget(null);
+  plan.index += 1;
+  if (plan.index >= plan.steps.length) { finish(); return; }
+
+  checkingMiss = false;
+  planToken += 1; // a click on the target wins over any look-again still running from a miss
+  const token = planToken;
+  const found = await lookFor([plan.steps[plan.index]], token);
+  if (found.cancelled) return;
+  if (found.target) { point(found.target); return; }
+  stopGuide(`✅ Nice! But I can't see "${plan.steps[plan.index]}" yet. Call me again when it's on screen.`);
+}
+
+// A click somewhere else: the screen may have changed, or the user did the step another way (a shortcut key).
+async function onMissedClick() {
+  if (checkingMiss) return;
+  checkingMiss = true;
+  const token = planToken;
+  const remaining = plan.steps.slice(plan.index, plan.index + 2); // this step, then the next one
+  const found = await lookFor(remaining, token);
+  if (found.cancelled) return;
+  checkingMiss = false;
+
+  if (!found.target) {
+    stopGuide(`I lost sight of "${plan.steps[plan.index]}". Call me again when it's on screen. 👀`);
+    return;
+  }
+  if (found.offset === 1) { // the current step got done without clicking it: move on
+    plan.index += 1;
+    point(found.target);
+    return;
+  }
+  // Still the same step: follow it if it moved, and wiggle the tag once to catch the user's eye.
+  const moved = !sameRect(found.target.rect, plan.target.rect);
+  if (moved) point(found.target);
+  if (moved || !plan.hinted) {
+    plan.hinted = true;
+    nudgeStepTag();
+  }
+}
+
+api.onClick(({ hit }) => {
+  if (!plan) return;
+  if (hit) onStepDone();
+  else onMissedClick();
+});
 
 function setVisible(visible) {
   for (const el of [leftyEl, bubble]) {
     el.classList.toggle('show', visible);
     el.classList.toggle('hide', !visible);
   }
-  if (!visible) ring.classList.remove('show');
+  if (!visible) {
+    ring.classList.remove('show');
+    stepTag.classList.remove('show');
+  }
 }
 
 api.onShow((position) => {
@@ -183,7 +366,10 @@ api.onContext((seen) => {
   resolveContext(seen);
 });
 
-api.onHide(() => setVisible(false));
+api.onHide(() => {
+  cancelPlan();
+  setVisible(false);
+});
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();

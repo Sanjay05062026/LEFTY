@@ -5,10 +5,16 @@ const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+const WINDIR = process.env.WINDIR || 'C:\\Windows';
 const NATIVE_DIR = path.join(__dirname, '..', 'native');
+const BIN = path.join(NATIVE_DIR, 'bin');
 const SOURCE = path.join(NATIVE_DIR, 'uia-helper.cs');
-const EXE = path.join(NATIVE_DIR, 'bin', 'uia-helper.exe');
-const FRAMEWORK = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319');
+const TLBGEN_SOURCE = path.join(NATIVE_DIR, 'tlbgen.cs');
+const TLBGEN = path.join(BIN, 'tlbgen.exe');
+const INTEROP = path.join(BIN, 'Interop.UIAutomationClient.dll');
+const EXE = path.join(BIN, 'uia-helper.exe');
+const FRAMEWORK = path.join(WINDIR, 'Microsoft.NET', 'Framework64', 'v4.0.30319');
+const CSC = path.join(FRAMEWORK, 'csc.exe');
 const REQUEST_TIMEOUT_MS = 8000;
 
 let child = null;
@@ -18,26 +24,32 @@ const pending = new Map();
 
 function needsBuild() {
   if (!fs.existsSync(EXE)) return true;
-  return fs.statSync(SOURCE).mtimeMs > fs.statSync(EXE).mtimeMs;
+  const built = fs.statSync(EXE).mtimeMs;
+  return [SOURCE, TLBGEN_SOURCE].some((file) => fs.statSync(file).mtimeMs > built);
 }
 
-// Compile with the C# compiler that ships with Windows, so users never install anything.
-function build() {
+function run(file, args, cwd) {
   return new Promise((resolve, reject) => {
-    fs.mkdirSync(path.dirname(EXE), { recursive: true });
-    const args = [
-      '/nologo', '/optimize+', '/target:exe', `/out:${EXE}`,
-      `/r:${path.join(FRAMEWORK, 'WPF', 'UIAutomationClient.dll')}`,
-      `/r:${path.join(FRAMEWORK, 'WPF', 'UIAutomationTypes.dll')}`,
-      `/r:${path.join(FRAMEWORK, 'WPF', 'WindowsBase.dll')}`,
-      `/r:${path.join(FRAMEWORK, 'System.Web.Extensions.dll')}`,
-      SOURCE,
-    ];
-    execFile(path.join(FRAMEWORK, 'csc.exe'), args, { windowsHide: true }, (error, stdout) => {
-      if (error) reject(new Error(`could not build uia-helper: ${stdout || error.message}`));
+    execFile(file, args, { windowsHide: true, cwd }, (error, stdout, stderr) => {
+      if (error) reject(new Error(`${path.basename(file)} failed: ${stdout || stderr || error.message}`));
       else resolve();
     });
   });
+}
+
+// Everything is built with the C# compiler that ships with Windows, so users never install anything:
+// 1. tlbgen turns the type library inside UIAutomationCore.dll into .NET definitions of native UI Automation,
+// 2. the helper is compiled with those definitions embedded (/link), so it needs no extra files at runtime.
+async function build() {
+  fs.mkdirSync(BIN, { recursive: true });
+  await run(CSC, ['/nologo', `/out:${TLBGEN}`, TLBGEN_SOURCE]);
+  await run(TLBGEN, [path.join(WINDIR, 'System32', 'UIAutomationCore.dll'), INTEROP], BIN);
+  await run(CSC, [
+    '/nologo', '/optimize+', '/target:exe', `/out:${EXE}`,
+    `/link:${INTEROP}`,
+    `/r:${path.join(FRAMEWORK, 'System.Web.Extensions.dll')}`,
+    SOURCE,
+  ]);
 }
 
 function failAll(reason) {
@@ -110,6 +122,11 @@ function snapshot(hwnd) {
   return request(hwnd ? { cmd: 'snapshot', hwnd } : { cmd: 'snapshot' });
 }
 
+// Hands keyboard focus back to the user's app (Lefty's overlay takes it while the user types a goal).
+function focusApp(hwnd) {
+  return request(hwnd ? { cmd: 'focus', hwnd } : { cmd: 'focus' });
+}
+
 const APP_NAMES = {
   code: 'VS Code', chrome: 'Chrome', msedge: 'Edge', firefox: 'Firefox', brave: 'Brave', explorer: 'File Explorer',
   notepad: 'Notepad', pycharm64: 'PyCharm', pycharm: 'PyCharm', idea64: 'IntelliJ IDEA', winword: 'Word',
@@ -142,4 +159,4 @@ function stop() {
   ready = null;
 }
 
-module.exports = { start, snapshot, appName, stop };
+module.exports = { start, snapshot, focusApp, appName, stop };

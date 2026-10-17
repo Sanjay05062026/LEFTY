@@ -69,7 +69,21 @@
     return best;
   }
 
-  const api = { findTarget, tokenize, queryTokens };
+  // "File > Save as" or "click file then save as" -> ["File", "Save as"]. Commas are not separators:
+  // they appear in ordinary sentences. Later the AI brain writes these steps instead of the user.
+  function parsePlan(goal) {
+    return String(goal || '')
+      .split(/\s*(?:->|>|→|,?\s*(?:\band\s+)?\bthen\b)\s*/i)
+      .map((step) => step.replace(/[\s,]+$/, '').trim())
+      .filter(Boolean);
+  }
+
+  // "I'm stuck", "what next?": needs the AI brain to look at the screen, not a button search.
+  function isStuck(goal) {
+    return /\b(stuck|what\s+(do\s+i\s+do\s+)?next|what\s+now|help\s+me|lost)\b/i.test(String(goal || ''));
+  }
+
+  const api = { findTarget, parsePlan, isStuck, tokenize, queryTokens };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.LeftyMatch = api;
 })(this);
