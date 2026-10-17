@@ -187,6 +187,8 @@ function reset() {
   stopPointing();
   tuckBubble(false);
   stepTag.dataset.nudges = '0';
+  hideGuard();
+  lastSeen = []; // a new summon may be over a different app
   messages.replaceChildren();
   greeting = addMessage("👋 Hi! What's your goal?", 'lefty');
   input.value = '';
@@ -227,6 +229,7 @@ async function lookFor(steps, token) {
     await sleep(delay);
     if (token !== planToken) return { cancelled: true };
     const seen = await api.rescan();
+    rememberSeen(seen);
     if (token !== planToken) return { cancelled: true };
     if (!seen.ok) continue;
     for (const [offset, step] of steps.entries()) {
@@ -332,10 +335,82 @@ async function onMissedClick() {
   }
 }
 
-api.onClick(({ hit }) => {
+api.onClick(({ hit, free }) => {
+  if (free) { refreshSeenSoon(); return; } // not pointing at anything: just keep the guard's picture of the screen fresh
   if (!plan) return;
   if (hit) onStepDone();
   else onMissedClick();
+});
+
+/* ---------- Click guard ----------
+   While Lefty is on screen, resting the mouse on a button that throws work away ("Delete", "Don't Save",
+   "Empty Recycle Bin") flags it before the click. It uses the latest screen read, so it costs no extra
+   work per mouse move; the read is refreshed after the user's clicks, since clicks change the screen. */
+const GUARD_REST_MS = 250;
+const GUARD_PAD = 3;
+const guardRing = document.getElementById('guard-ring');
+const guardTag = document.getElementById('guard-tag');
+let lastSeen = [];       // elements of the latest screen read
+let guarded = null;      // the element currently flagged
+let guardTimer = null;
+let refreshTimer = null;
+
+function rememberSeen(seen) {
+  if (seen && seen.ok) lastSeen = seen.elements;
+}
+
+function refreshSeenSoon() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => rememberSeen(await api.rescan()), 500);
+}
+
+const contains = (rect, point) => point.x >= rect.x && point.y >= rect.y && point.x <= rect.x + rect.w && point.y <= rect.y + rect.h;
+
+function hideGuard() {
+  guarded = null;
+  guardRing.classList.remove('show', 'high');
+  guardTag.classList.remove('show', 'high');
+}
+
+function showGuard(element, risk) {
+  guarded = element;
+  const r = { x: element.rect.x - screenArea.originX, y: element.rect.y - screenArea.originY, w: element.rect.w, h: element.rect.h };
+  setPosition(guardRing, r.x - GUARD_PAD, r.y - GUARD_PAD);
+  guardRing.style.width = `${r.w + GUARD_PAD * 2}px`;
+  guardRing.style.height = `${r.h + GUARD_PAD * 2}px`;
+  guardTag.textContent = `⚠️ ${risk.warning}`;
+  const high = risk.level === 'high';
+  guardRing.classList.toggle('high', high);
+  guardTag.classList.toggle('high', high);
+  guardRing.classList.add('show');
+  guardTag.classList.add('show');
+
+  // Above the button, or below it when there's no room.
+  const w = guardTag.offsetWidth || 260;
+  const h = guardTag.offsetHeight || 32;
+  const above = r.y - GUARD_PAD - h - 8;
+  const y = above >= GAP ? above : r.y + r.h + GUARD_PAD + 8;
+  const box = clampToScreen({ x: r.x - GUARD_PAD, y, w, h });
+  setPosition(guardTag, box.x, box.y);
+  api.log(`guard: "${element.name}" (${risk.level})`);
+}
+
+function checkGuard(point) {
+  const element = LeftyGuard.elementAt(point, lastSeen);
+  const risk = element && LeftyGuard.riskOf(element);
+  if (!risk) { hideGuard(); return; }
+  if (guarded === element) return;
+  showGuard(element, risk);
+}
+
+// The overlay ignores clicks but still receives mouse moves over the whole screen.
+document.addEventListener('mousemove', (event) => {
+  clearTimeout(guardTimer);
+  if (!leftyEl.classList.contains('show')) return;
+  if (bubble.contains(event.target) && !bubble.classList.contains('tucked')) { hideGuard(); return; } // over Lefty's own chat
+  const point = { x: event.clientX + screenArea.originX, y: event.clientY + screenArea.originY };
+  if (guarded && !contains(guarded.rect, point)) hideGuard(); // left the button: clear at once
+  guardTimer = setTimeout(() => checkGuard(point), GUARD_REST_MS);
 });
 
 function setVisible(visible) {
@@ -346,6 +421,9 @@ function setVisible(visible) {
   if (!visible) {
     ring.classList.remove('show');
     stepTag.classList.remove('show');
+    hideGuard();
+    clearTimeout(guardTimer);
+    clearTimeout(refreshTimer);
   }
 }
 
@@ -360,6 +438,7 @@ api.onShow((position) => {
 
 api.onContext((seen) => {
   if (seen.seq !== currentSeq) return;
+  rememberSeen(seen);
   if (seen.ok && greeting && greeting.isConnected) {
     greeting.textContent = `👋 Hi! I can see ${seen.app}. What's your goal?`;
   }

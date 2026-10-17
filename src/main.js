@@ -68,7 +68,11 @@ uIOhook.on('mousedown', (event) => {
 });
 
 function handleClick(point) {
-  if (!overlayVisible || !pointTarget || overlayInteractive) return; // clicks in Lefty's own bubble don't count
+  if (!overlayVisible || overlayInteractive) return; // clicks in Lefty's own bubble don't count
+  if (!pointTarget) {
+    overlayWindow.webContents.send('lefty:click', { free: true }); // the screen probably changed: the guard re-reads it
+    return;
+  }
   const slack = 4;
   const r = pointTarget;
   const hit = point.x >= r.x - slack && point.x <= r.x + r.w + slack && point.y >= r.y - slack && point.y <= r.y + r.h + slack;

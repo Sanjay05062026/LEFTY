@@ -53,6 +53,18 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 /* Step done: a quick green flash before Lefty moves on. */
 .ring.show.hit { border-color: #22C55E; box-shadow: 0 0 0 4px rgba(34,197,94,.3), 0 0 22px 4px rgba(34,197,94,.45); animation: ring-hit .4s ease-out; }
 
+/* Click guard: amber for "think twice", red for "can't be undone". Never catches clicks. */
+.guard-ring, .guard-tag { position: absolute; opacity: 0; pointer-events: none; }
+.guard-ring { border: 3px dashed #F59E0B; border-radius: 9px; background: rgba(245,158,11,.08); }
+.guard-ring.high { border-color: #EF4444; background: rgba(239,68,68,.08); }
+.guard-tag {
+  max-width: 340px; padding: 7px 12px; border-radius: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: #FFFBEB; color: #78350F; border: 1px solid #FCD34D; font-size: 13px; font-weight: 600;
+  box-shadow: 0 10px 24px -8px rgba(120,53,15,.35);
+}
+.guard-tag.high { background: #FEF2F2; color: #7F1D1D; border-color: #FCA5A5; }
+.guard-ring.show, .guard-tag.show { opacity: 1; animation: rise .2s ease-out; }
+
 .bubble-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .name { font-weight: 800; font-size: 15px; }
 .hint { font-size: 11px; color: #94A3B8; }
