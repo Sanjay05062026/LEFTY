@@ -218,6 +218,7 @@ function point(target) {
   }
   plan.target = target;
   pointAt(target);
+  api.raise(); // a menu that just opened is drawn above Lefty otherwise
   setStepTag(plan.steps.length > 1 ? `${plan.index + 1}/${plan.steps.length}` : '', target.name || target.type);
   api.setTarget(target.rect);
   api.log(`step ${plan.index + 1}/${plan.steps.length}: pointing at ${target.type} "${target.name}" (${Math.round(target.rect.x)},${Math.round(target.rect.y)} ${Math.round(target.rect.w)}x${Math.round(target.rect.h)})`);
@@ -347,16 +348,22 @@ api.onClick(({ hit, free }) => {
    "Empty Recycle Bin") flags it before the click. It uses the latest screen read, so it costs no extra
    work per mouse move; the read is refreshed after the user's clicks, since clicks change the screen. */
 const GUARD_REST_MS = 250;
+const GUARD_STALE_MS = 1500; // older than this, the screen may have changed without a click (keyboard, timers)
 const GUARD_PAD = 3;
 const guardRing = document.getElementById('guard-ring');
 const guardTag = document.getElementById('guard-tag');
 let lastSeen = [];       // elements of the latest screen read
+let lastSeenAt = 0;
+let lastPoint = null;    // where the mouse is resting
 let guarded = null;      // the element currently flagged
 let guardTimer = null;
 let refreshTimer = null;
+let refreshing = false;
 
 function rememberSeen(seen) {
-  if (seen && seen.ok) lastSeen = seen.elements;
+  if (!seen || !seen.ok) return;
+  lastSeen = seen.elements;
+  lastSeenAt = Date.now();
 }
 
 function refreshSeenSoon() {
@@ -392,10 +399,21 @@ function showGuard(element, risk) {
   const y = above >= GAP ? above : r.y + r.h + GUARD_PAD + 8;
   const box = clampToScreen({ x: r.x - GUARD_PAD, y, w, h });
   setPosition(guardTag, box.x, box.y);
+  api.raise();
   api.log(`guard: "${element.name}" (${risk.level})`);
 }
 
-function checkGuard(point) {
+async function checkGuard(point) {
+  // A dialog opened from the keyboard ("Don't save" after Ctrl+W) changes the screen without a click: look again.
+  if (Date.now() - lastSeenAt > GUARD_STALE_MS && !refreshing) {
+    refreshing = true;
+    try {
+      rememberSeen(await api.rescan());
+    } finally {
+      refreshing = false;
+    }
+    if (!leftyEl.classList.contains('show') || point !== lastPoint) return; // the mouse moved on meanwhile
+  }
   const element = LeftyGuard.elementAt(point, lastSeen);
   const risk = element && LeftyGuard.riskOf(element);
   if (!risk) { hideGuard(); return; }
@@ -409,6 +427,7 @@ document.addEventListener('mousemove', (event) => {
   if (!leftyEl.classList.contains('show')) return;
   if (bubble.contains(event.target) && !bubble.classList.contains('tucked')) { hideGuard(); return; } // over Lefty's own chat
   const point = { x: event.clientX + screenArea.originX, y: event.clientY + screenArea.originY };
+  lastPoint = point;
   if (guarded && !contains(guarded.rect, point)) hideGuard(); // left the button: clear at once
   guardTimer = setTimeout(() => checkGuard(point), GUARD_REST_MS);
 });

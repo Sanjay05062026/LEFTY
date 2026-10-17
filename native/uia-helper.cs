@@ -81,6 +81,9 @@ static class UiaHelper
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint attach, uint attachTo, bool doAttach);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] static extern bool PeekMessage(out MSG message, IntPtr hwnd, uint min, uint max, uint remove);
+    [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    const byte VK_MENU = 0x12;
+    const uint KEYEVENTF_KEYUP = 2;
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
@@ -234,7 +237,18 @@ static class UiaHelper
             if (attached) AttachThreadInput(thisThread, foregroundThread, false);
         }
         Thread.Sleep(50); // the switch is not instant
-        return new Dictionary<string, object> { { "ok", true }, { "focused", GetForegroundWindow() == hwnd }, { "attached", attached } };
+        string method = "attach";
+        if (GetForegroundWindow() != hwnd)
+        {
+            // Fallback: Windows lets the process that sent the last input change the foreground window.
+            // A bare Alt tap is that input; it goes to Lefty's own overlay, where it does nothing.
+            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            SetForegroundWindow(hwnd);
+            Thread.Sleep(50);
+            method = "alt";
+        }
+        return new Dictionary<string, object> { { "ok", true }, { "focused", GetForegroundWindow() == hwnd }, { "attached", attached }, { "method", method } };
     }
 
     static Dictionary<string, object> Snapshot(IntPtr hwnd)

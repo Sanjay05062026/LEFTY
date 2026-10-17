@@ -214,11 +214,16 @@ ipcMain.on('overlay:set-interactive', (_event, interactive) => {
   overlayWindow.setIgnoreMouseEvents(!interactive, { forward: true });
 });
 ipcMain.on('overlay:target', (_event, rect) => { pointTarget = rect || null; });
+// Menus and dropdowns are always-on-top windows too, and the newest one is drawn above Lefty.
+// Whenever Lefty points or warns, he steps back on top (without taking focus, so the menu stays open).
+ipcMain.on('overlay:raise', () => {
+  if (overlayVisible) overlayWindow.moveTop();
+});
 // Once Lefty points, the user's next move is a click in their app, so the app gets the keyboard back.
 ipcMain.on('lefty:focus-app', () => {
   if (SELFTEST) return; // never move the user's focus during a background check
   eyes.focusApp(readHwnd)
-    .then((result) => console.log(`[lefty] handed focus back to the app (${result.focused ? 'ok' : `Windows refused, attached=${result.attached}`})`))
+    .then((result) => console.log(`[lefty] handed focus back to the app (${result.focused ? `ok via ${result.method}` : `Windows refused, attached=${result.attached}`})`))
     .catch((error) => console.log('[lefty] could not hand focus back:', error.message));
 });
 // After a step, the screen changes (a menu opens, a dialog appears): look again.

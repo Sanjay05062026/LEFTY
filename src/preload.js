@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('lefty', {
   setTarget: (rect) => ipcRenderer.send('overlay:target', rect),
   rescan: () => ipcRenderer.invoke('lefty:rescan'),
   focusApp: () => ipcRenderer.send('lefty:focus-app'),
+  raise: () => ipcRenderer.send('overlay:raise'),
   log: (message) => ipcRenderer.send('overlay:log', String(message)),
   requestHide: () => ipcRenderer.send('lefty:request-hide'),
   setInteractive: (interactive) => ipcRenderer.send('overlay:set-interactive', interactive),

@@ -133,9 +133,12 @@ async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarge
       { name: 'Save', type: 'Button', enabled: true, rect: at(300, 200, 80, 30) },
       { name: 'Empty Recycle Bin', type: 'MenuItem', enabled: true, rect: at(400, 200, 160, 30) },
     ];
-    overlayWindow.webContents.send('lefty:context', { seq, ok: true, app: 'Guard test', elements: fake });
-    await sleep(150);
-    const hover = (rect) => js(`document.dispatchEvent(new MouseEvent('mousemove', { clientX: ${rect.x - origin.x + rect.w / 2}, clientY: ${rect.y - origin.y + rect.h / 2}, bubbles: true })); true`);
+    // Fresh pretend screen before each hover: the guard re-reads the real screen when its picture is over 1.5s old.
+    const hover = async (rect) => {
+      overlayWindow.webContents.send('lefty:context', { seq, ok: true, app: 'Guard test', elements: fake });
+      await sleep(100);
+      return js(`document.dispatchEvent(new MouseEvent('mousemove', { clientX: ${rect.x - origin.x + rect.w / 2}, clientY: ${rect.y - origin.y + rect.h / 2}, bubbles: true })); true`);
+    };
     const guardState = () => js(`(() => {
       const tag = document.getElementById('guard-tag');
       const ringEl = document.getElementById('guard-ring');
