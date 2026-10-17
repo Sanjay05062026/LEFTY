@@ -19,6 +19,9 @@ let overlayInteractive = false; // true while the mouse is over Lefty's bubble
 let pointTarget = null;         // what Lefty is pointing at right now (global DIP rect), for click checking
 let readHwnd;                   // self-test only: read this window instead of the user's app
 
+// The self-test gets its own data folder: it never touches the user's login data or a running Lefty's cache.
+if (SELFTEST) app.setPath('userData', path.join(app.getPath('temp'), 'lefty-selftest'));
+
 // Two copies of Lefty would both react to Ctrl+Space and cancel each other out.
 const hasLock = SELFTEST || app.requestSingleInstanceLock();
 if (!hasLock) app.quit();
@@ -70,7 +73,7 @@ uIOhook.on('mousedown', (event) => {
 function handleClick(point) {
   if (!overlayVisible || overlayInteractive) return; // clicks in Lefty's own bubble don't count
   if (!pointTarget) {
-    overlayWindow.webContents.send('lefty:click', { free: true }); // the screen probably changed: the guard re-reads it
+    overlayWindow.webContents.send('lefty:click', { free: true, x: point.x, y: point.y }); // the screen probably changed: the guard re-reads it
     return;
   }
   const slack = 4;
@@ -78,8 +81,24 @@ function handleClick(point) {
   const hit = point.x >= r.x - slack && point.x <= r.x + r.w + slack && point.y >= r.y - slack && point.y <= r.y + r.h + slack;
   console.log(`[lefty] click ${hit ? 'on' : 'off'} target at ${point.x},${point.y}`);
   if (hit) pointTarget = null; // a double-click must not count as two finished steps
-  overlayWindow.webContents.send('lefty:click', { hit });
+  overlayWindow.webContents.send('lefty:click', { hit, x: point.x, y: point.y });
 }
+
+// Keys matter to a guide too: Ctrl+S saves, Enter confirms a dialog, typing names a file. Only these three
+// keys are ever named; for everything else the overlay just hears "typing happened", never which keys.
+let lastTypingSent = 0;
+uIOhook.on('keydown', (event) => {
+  if (!overlayVisible || overlayInteractive) return;
+  let message = null;
+  if (event.ctrlKey && event.keycode === UiohookKey.S) message = { combo: event.shiftKey ? 'Ctrl+Shift+S' : 'Ctrl+S' };
+  else if (event.keycode === UiohookKey.Enter) message = { combo: 'Enter' };
+  else if (event.keycode === UiohookKey.Escape) message = { combo: 'Escape' };
+  else if (!event.ctrlKey && !event.altKey && !event.metaKey && Date.now() - lastTypingSent > 300) {
+    lastTypingSent = Date.now();
+    message = { typing: true };
+  }
+  if (message) overlayWindow.webContents.send('lefty:key', message);
+});
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -160,7 +179,10 @@ async function readApp(hwnd) {
     const shot = await eyes.snapshot(hwnd);
     const appLabel = eyes.appName(shot.window);
     const elements = shot.elements.map((el) => ({ name: el.name, type: el.type, enabled: el.enabled, rect: toDip(el.rect) }));
-    return { ok: true, app: appLabel, elements, ms: shot.ms, windows: shot.windows, skipped: shot.skipped, skipError: shot.skipError };
+    return {
+      ok: true, app: appLabel, title: shot.window.title, elements,
+      ms: shot.ms, windows: shot.windows, skipped: shot.skipped, skipError: shot.skipError,
+    };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -227,9 +249,9 @@ ipcMain.on('lefty:focus-app', () => {
     .catch((error) => console.log('[lefty] could not hand focus back:', error.message));
 });
 // After a step, the screen changes (a menu opens, a dialog appears): look again.
-ipcMain.handle('lefty:rescan', async () => {
+ipcMain.handle('lefty:rescan', async (_event, options) => {
   const seen = await readApp(readHwnd);
-  console.log(`[lefty] looked again: ${describe(seen)}`);
+  if (!(options && options.quiet)) console.log(`[lefty] looked again: ${describe(seen)}`); // background re-checks stay out of the log
   return seen;
 });
 ipcMain.on('overlay:log', (_event, message) => console.log(`[overlay] ${message}`));

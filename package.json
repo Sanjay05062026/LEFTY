@@ -9,8 +9,9 @@
     "test:eyes": "node scripts/test-eyes.js",
     "test:match": "node scripts/test-match.js",
     "test:guard": "node scripts/test-guard.js",
+    "test:skills": "node scripts/test-skills.js",
     "selftest": "set LEFTY_SELFTEST=1&& electron .",
-    "test": "npm run test:match && npm run test:guard && npm run test:eyes && npm run selftest"
+    "test": "npm run test:match && npm run test:guard && npm run test:skills && npm run test:eyes && npm run selftest"
   },
   "devDependencies": {
     "electron": "33.2.1"

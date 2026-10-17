@@ -92,6 +92,10 @@ async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarge
     check(true, `unknown goal gets an honest reply: "${miss}"`);
     check(!(await bubbleTucked()) && (await tagText()) === '', 'a reply brings the chat back and clears the step tag');
 
+    await submit('save this');
+    const cantSave = await waitForMessage(/Ctrl\+S/, 'the save goal reply on a screen with nothing to save');
+    check(getTarget() === null, `a "save" goal where nothing can be saved says so honestly: "${cantSave}"`);
+
     await submit("I'm stuck, what do I do next?");
     const stuck = await waitForMessage(/brain/, 'the stuck reply');
     check(getTarget() === null, `"I'm stuck" explains the brain is coming and points at nothing: "${stuck}"`);
