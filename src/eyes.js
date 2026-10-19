@@ -21,6 +21,7 @@ let child = null;
 let ready = null;      // promise that resolves once the helper says it is ready
 let nextId = 1;
 const pending = new Map();
+const listeners = new Set(); // for messages the helper sends unasked (see onScreenMode)
 
 function needsBuild() {
   if (!fs.existsSync(EXE)) return true;
@@ -65,6 +66,7 @@ function onLine(line, markReady) {
   let message;
   try { message = JSON.parse(line); } catch { return; }
   if (message.ready) { markReady(); return; }
+  if (message.event) { listeners.forEach((listener) => listener(message)); return; }
   const request = pending.get(message.id);
   if (!request) return;
   pending.delete(message.id);
@@ -127,6 +129,34 @@ function focusApp(hwnd) {
   return request(hwnd ? { cmd: 'focus', hwnd } : { cmd: 'focus' });
 }
 
+// The app windows open on the PC: [{ hwnd, title, process, minimized }], top first.
+async function windows() {
+  return (await request({ cmd: 'windows' })).windows;
+}
+
+// Where the text cursor is in a code editor: { hwnd, inFront, process, line?: rect of the cursor's line (its x is
+// where column 1 starts in VS Code), area?: the editor's rect, popup?: the suggestion list's rect while it's open,
+// ln?, col? (from the status bar) }. Physical pixels.
+function caret(hwnd) {
+  return request(hwnd ? { cmd: 'caret', hwnd } : { cmd: 'caret' });
+}
+
+// Presses keys in that window, which must be in front: ['ctrl+g', 'text:12:1', 'enter', 'wait:100'].
+// Only for actions the user asked Lefty to do (reading or fixing their code).
+function keys(hwnd, list) {
+  return request({ cmd: 'keys', hwnd, keys: list });
+}
+
+// Is this window fullscreen (covers its monitor with no title bar)? Defaults to the window in front.
+function screenMode(hwnd) {
+  return request(hwnd ? { cmd: 'screenmode', hwnd } : { cmd: 'screenmode' });
+}
+
+// Called with { fullscreen, process } whenever a fullscreen app (a game, a video) comes to the front or leaves it.
+function onScreenMode(callback) {
+  listeners.add((message) => { if (message.event === 'screenmode') callback(message); });
+}
+
 const APP_NAMES = {
   code: 'VS Code', chrome: 'Chrome', msedge: 'Edge', firefox: 'Firefox', brave: 'Brave', explorer: 'File Explorer',
   notepad: 'Notepad', pycharm64: 'PyCharm', pycharm: 'PyCharm', idea64: 'IntelliJ IDEA', winword: 'Word',
@@ -159,4 +189,4 @@ function stop() {
   ready = null;
 }
 
-module.exports = { start, snapshot, focusApp, appName, stop };
+module.exports = { start, snapshot, focusApp, windows, caret, keys, screenMode, onScreenMode, appName, stop };

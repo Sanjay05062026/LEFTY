@@ -4,6 +4,17 @@
 //   {"id":1,"cmd":"snapshot"}              -> elements of the last app the user was in (never Lefty itself)
 //   {"id":2,"cmd":"snapshot","hwnd":1234}  -> elements of a specific window (used by tests)
 //   {"id":3,"cmd":"focus"}                 -> give keyboard focus back to the user's app
+//   {"id":4,"cmd":"screenmode","hwnd":1234} -> is this window fullscreen? (used by tests)
+//   {"id":5,"cmd":"windows"}               -> the app windows open on the PC (title, process), top first
+//   {"id":6,"cmd":"focus","hwnd":1234}     -> bring that window to the front (restoring it if minimized)
+//   {"id":7,"cmd":"caret","hwnd":1234}     -> where the text cursor is in that window's code editor (asked many
+//                                             times a second while Lefty shows ghost code, so it must stay cheap)
+//   {"id":8,"cmd":"keys","hwnd":1234,"keys":["ctrl+g","text:12:1","enter","wait:100"]}
+//                                          -> presses keys in that window (only when the user asked Lefty to act:
+//                                             reading or fixing their code); refuses if it isn't in front
+//
+// Unasked, it also writes {"event":"screenmode","fullscreen":true|false,...} whenever a fullscreen app
+// (a game, a video) comes to the front or leaves it, so Lefty can let go of Ctrl+Space while it is there.
 //
 // A snapshot covers the app window plus its open menus, dropdowns and dialogs (separate windows in most apps).
 // Rectangles are physical screen pixels; Electron converts them to its own units (DIPs).
@@ -88,11 +99,25 @@ static class UiaHelper
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+    const int SW_RESTORE = 9;
+    const int GWL_EXSTYLE = -20;
+    const int WS_EX_TOOLWINDOW = 0x80;
+    const int DWMWA_CLOAKED = 14;
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int index);
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+    [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+    const uint MONITOR_DEFAULTTONEAREST = 2;
+    const uint WS_CAPTION = 0x00C00000;
+    const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder text, int count);
 
@@ -128,13 +153,38 @@ static class UiaHelper
                     : UserWindow();
                 if ((cmd as string) == "snapshot")
                 {
-                    var reply = Snapshot(target);
+                    var reply = SnapshotWithRetry(target);
                     reply["id"] = id;
                     Write(reply);
                 }
                 else if ((cmd as string) == "focus")
                 {
                     var reply = Focus(target);
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "screenmode")
+                {
+                    var reply = hwnd != null ? ScreenMode(target, false) : ScreenMode(GetForegroundWindow(), true);
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "windows")
+                {
+                    var reply = new Dictionary<string, object> { { "ok", true }, { "windows", OpenWindows() }, { "id", id } };
+                    Write(reply);
+                }
+                else if ((cmd as string) == "caret")
+                {
+                    var reply = Caret(target);
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "keys")
+                {
+                    object keys;
+                    request.TryGetValue("keys", out keys);
+                    var reply = PressKeys(target, keys as System.Collections.ArrayList);
                     reply["id"] = id;
                     Write(reply);
                 }
@@ -152,12 +202,53 @@ static class UiaHelper
 
     static void TrackForeground()
     {
+        bool fullscreen = false;
         while (true)
         {
             IntPtr hwnd = GetForegroundWindow();
             if (IsUserWindow(hwnd)) lock (windowLock) lastUserWindow = hwnd;
+            var mode = ScreenMode(hwnd, true);
+            if ((bool)mode["fullscreen"] != fullscreen)
+            {
+                fullscreen = !fullscreen;
+                mode.Remove("ok");
+                mode["event"] = "screenmode";
+                Write(mode);
+            }
             Thread.Sleep(100);
         }
+    }
+
+    // A fullscreen app is one that covers its whole monitor with no title bar (games, videos, slideshows),
+    // or a game in exclusive fullscreen. Maximized windows keep their title bar, so they never count.
+    // Lefty's own overlay and the desktop also cover the screen; they are not "an app in front".
+    // skipLefty is false only when a test asks about one of Lefty's own windows on purpose.
+    static Dictionary<string, object> ScreenMode(IntPtr hwnd, bool skipLefty)
+    {
+        bool fullscreen = false, covers = false, titleBar = false;
+        string process = "";
+        if (hwnd != IntPtr.Zero && IsWindow(hwnd))
+        {
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            string cls = ClassOf(hwnd);
+            bool ignored = (skipLefty && pid == (uint)leftyPid) || cls == "Progman" || cls == "WorkerW" || shellClasses.Contains(cls);
+            if (!ignored)
+            {
+                RECT rect;
+                var monitor = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+                covers = GetWindowRect(hwnd, out rect)
+                    && GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref monitor)
+                    && rect.Left <= monitor.rcMonitor.Left && rect.Top <= monitor.rcMonitor.Top
+                    && rect.Right >= monitor.rcMonitor.Right && rect.Bottom >= monitor.rcMonitor.Bottom;
+                titleBar = ((uint)GetWindowLong(hwnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION;
+                int state;
+                bool exclusive = SHQueryUserNotificationState(out state) == 0 && state == QUNS_RUNNING_D3D_FULL_SCREEN;
+                fullscreen = (covers && !titleBar) || exclusive;
+                try { process = Process.GetProcessById((int)pid).ProcessName; } catch { }
+            }
+        }
+        return new Dictionary<string, object> { { "ok", true }, { "fullscreen", fullscreen }, { "process", process }, { "coversScreen", covers }, { "titleBar", titleBar } };
     }
 
     static bool IsUserWindow(IntPtr hwnd)
@@ -220,9 +311,36 @@ static class UiaHelper
     // user can type a goal, but many apps treat the first click on an inactive window as "activate" only,
     // so the click on Lefty's target would do nothing. Windows only lets the foreground process change the
     // foreground window, so the helper briefly shares input state with it (AttachThreadInput) to be allowed.
+    // The app windows a user would call "open": visible, titled, not owned by another window, not a tool window,
+    // not hidden by Windows ("cloaked" Store apps on another desktop), not Lefty, not the shell. Top first.
+    static List<object> OpenWindows()
+    {
+        var list = new List<object>();
+        EnumWindows((hwnd, _) =>
+        {
+            if (!IsUserWindow(hwnd) || GetWindow(hwnd, GW_OWNER) != IntPtr.Zero) return true;
+            if ((GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) return true;
+            int cloaked;
+            if (DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked != 0) return true;
+            var title = new StringBuilder(512);
+            GetWindowText(hwnd, title, title.Capacity);
+            if (title.Length == 0) return true;
+            string cls = ClassOf(hwnd);
+            if (cls == "Progman" || cls == "WorkerW") return true;
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            string process = "";
+            try { process = Process.GetProcessById((int)pid).ProcessName; } catch { }
+            list.Add(new Dictionary<string, object> { { "hwnd", hwnd.ToInt64() }, { "title", Clip(title.ToString(), 200) }, { "process", process }, { "minimized", IsIconic(hwnd) } });
+            return list.Count < 40;
+        }, IntPtr.Zero);
+        return list;
+    }
+
     static Dictionary<string, object> Focus(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return Error(null, "no app window found");
+        if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE); // a minimized window can't take focus
         MSG message;
         PeekMessage(out message, IntPtr.Zero, 0, 0, 0); // AttachThreadInput fails unless this thread has a message queue; this creates it
         uint ignored;
@@ -250,6 +368,221 @@ static class UiaHelper
             method = "alt";
         }
         return new Dictionary<string, object> { { "ok", true }, { "focused", GetForegroundWindow() == hwnd }, { "attached", attached }, { "method", method } };
+    }
+
+    // Ghost code: Lefty draws code at the text cursor for the user to type over, so he needs to know, many times a
+    // second, which line the cursor is on and where that line is on screen. VS Code (outside screen-reader mode)
+    // hides the text itself, but it still tells UI Automation the cursor line's rectangle (its left edge is where
+    // column 1 starts), and its status bar says "Ln 12, Col 5". With the status bar item remembered, one read takes
+    // about 2 ms. The editor's own area (without side bars and panels) keeps the ghost inside it.
+    const int TextPatternId = 10014;
+    const int ButtonType = 50000;
+    const int TextType = 50020;
+    const int StatusSearchEveryMs = 1000;
+    static readonly System.Text.RegularExpressions.Regex lnCol = new System.Text.RegularExpressions.Regex(@"^Ln (\d+), Col (\d+)");
+    static IUIAutomationElement statusItem;
+    static IntPtr statusWindow = IntPtr.Zero;
+    static IUIAutomationElement editorItem;    // the last focused element that knew the cursor (VS Code's text input)
+    static IntPtr editorWindow = IntPtr.Zero;
+    static long statusSearchedAt = -StatusSearchEveryMs;
+    static readonly Stopwatch clock = Stopwatch.StartNew();
+    static readonly Dictionary<IntPtr, string> processOf = new Dictionary<IntPtr, string>();
+
+    static Dictionary<string, object> Caret(IntPtr hwnd)
+    {
+        var reply = new Dictionary<string, object> { { "ok", true }, { "hwnd", hwnd.ToInt64() }, { "inFront", false } };
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd) || GetForegroundWindow() != hwnd) return reply;
+        reply["inFront"] = true;
+        string process;
+        if (!processOf.TryGetValue(hwnd, out process))
+        {
+            uint pid;
+            GetWindowThreadProcessId(hwnd, out pid);
+            try { process = Process.GetProcessById((int)pid).ProcessName; } catch { process = ""; }
+            processOf[hwnd] = process;
+        }
+        reply["process"] = process;
+
+        IUIAutomationElement focused = uia.GetFocusedElement();
+        IUIAutomationElement source = focused;
+        var text = focused == null ? null : focused.GetCurrentPattern(TextPatternId) as IUIAutomationTextPattern;
+        IUIAutomationTreeWalker walker = uia.RawViewWalker;
+        if (text != null)
+        {
+            editorItem = focused;
+            editorWindow = hwnd;
+        }
+        else if (editorItem != null && editorWindow == hwnd && focused != null)
+        {
+            // While VS Code's suggestion list is open, the highlighted suggestion counts as focused, and it knows
+            // nothing about the cursor; the editor still does. Its box is reported so ghost code can stay clear of it.
+            try { text = editorItem.GetCurrentPattern(TextPatternId) as IUIAutomationTextPattern; source = editorItem; }
+            catch (COMException) { editorItem = null; }
+            IUIAutomationElement up = focused;
+            for (int depth = 0; depth < 10 && up != null; depth++)
+            {
+                if ((up.CurrentClassName ?? "").Contains("editor-widget")) { reply["popup"] = RectToDict(up.CurrentBoundingRectangle); break; }
+                up = walker.GetParentElement(up);
+            }
+        }
+        if (text != null)
+        {
+            try
+            {
+                IUIAutomationTextRangeArray selection = text.GetSelection();
+                var rects = selection != null && selection.Length > 0 ? selection.GetElement(0).GetBoundingRectangles() as double[] : null;
+                if (rects != null && rects.Length >= 4)
+                    reply["line"] = new Dictionary<string, object> { { "x", rects[0] }, { "y", rects[1] }, { "w", rects[2] }, { "h", rects[3] } };
+            }
+            catch (COMException) { if (source == editorItem) editorItem = null; } // the editor tab was closed
+        }
+        if (reply.ContainsKey("line"))
+        {
+            // The editor around the cursor: the nearest parent whose page class says "monaco-editor".
+            IUIAutomationElement el = source;
+            for (int depth = 0; depth < 12 && el != null; depth++)
+            {
+                el = walker.GetParentElement(el);
+                if (el != null && (el.CurrentClassName ?? "").Contains("monaco-editor"))
+                {
+                    reply["area"] = RectToDict(el.CurrentBoundingRectangle);
+                    break;
+                }
+            }
+        }
+
+        if (statusWindow != hwnd) { statusItem = null; statusWindow = hwnd; statusSearchedAt = -StatusSearchEveryMs; }
+        string status = null;
+        if (statusItem != null)
+        {
+            try { status = statusItem.CurrentName; } catch (COMException) { statusItem = null; }
+        }
+        if ((status == null || !lnCol.IsMatch(status)) && clock.ElapsedMilliseconds - statusSearchedAt >= StatusSearchEveryMs)
+        {
+            statusSearchedAt = clock.ElapsedMilliseconds;
+            statusItem = FindStatusItem(hwnd);
+            status = statusItem != null ? statusItem.CachedName : null;
+        }
+        var match = lnCol.Match(status ?? "");
+        if (match.Success)
+        {
+            reply["ln"] = int.Parse(match.Groups[1].Value);
+            reply["col"] = int.Parse(match.Groups[2].Value);
+        }
+        return reply;
+    }
+
+    // The "Ln 12, Col 5" item in the window's status bar (a button in VS Code, plain text in some editors).
+    static IUIAutomationElement FindStatusItem(IntPtr hwnd)
+    {
+        var cache = uia.CreateCacheRequest();
+        cache.AddProperty(NameProperty);
+        cache.AddProperty(ControlTypeProperty);
+        var condition = uia.CreateOrCondition(
+            uia.CreatePropertyCondition(ControlTypeProperty, ButtonType),
+            uia.CreatePropertyCondition(ControlTypeProperty, TextType));
+        IUIAutomationElementArray found;
+        try { found = uia.ElementFromHandle(hwnd).FindAllBuildCache(TreeScope.TreeScope_Descendants, condition, cache); }
+        catch (COMException) { return null; }
+        IUIAutomationElement text = null;
+        for (int i = 0; found != null && i < found.Length; i++)
+        {
+            IUIAutomationElement el = found.GetElement(i);
+            if (!lnCol.IsMatch(el.CachedName ?? "")) continue;
+            if (el.CachedControlType == ButtonType) return el;
+            if (text == null) text = el;
+        }
+        return text;
+    }
+
+    // Keys Lefty presses himself, only when the user asked him to act on their code ("Fix it for me", reading the file
+    // to check it). "ctrl+shift+end" style combos, "text:..." types the characters as they are, "wait:120" pauses.
+    // The window must be in front, so the keys can never land in another app.
+    [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Explicit)] struct INPUTUNION { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
+    [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public INPUTUNION u; }
+    [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
+    const uint INPUT_KEYBOARD = 1;
+    const uint KEY_EXTENDED = 0x1, KEY_UP = 0x2, KEY_UNICODE = 0x4;
+    static readonly Dictionary<string, ushort> keyCodes = new Dictionary<string, ushort>
+    {
+        { "enter", 0x0D }, { "escape", 0x1B }, { "esc", 0x1B }, { "tab", 0x09 }, { "backspace", 0x08 }, { "delete", 0x2E },
+        { "home", 0x24 }, { "end", 0x23 }, { "up", 0x26 }, { "down", 0x28 }, { "left", 0x25 }, { "right", 0x27 },
+        { "pageup", 0x21 }, { "pagedown", 0x22 }, { "f8", 0x77 }, { "space", 0x20 },
+        { "ctrl", 0x11 }, { "shift", 0x10 }, { "alt", 0x12 },
+    };
+    static readonly HashSet<ushort> extendedKeys = new HashSet<ushort> { 0x2E, 0x24, 0x23, 0x26, 0x28, 0x25, 0x27, 0x21, 0x22 };
+
+    static INPUT Key(ushort vk, ushort scan, uint flags)
+    {
+        if (extendedKeys.Contains(vk)) flags |= KEY_EXTENDED;
+        return new INPUT { type = INPUT_KEYBOARD, u = new INPUTUNION { ki = new KEYBDINPUT { wVk = vk, wScan = scan, dwFlags = flags } } };
+    }
+
+    static void Send(List<INPUT> inputs)
+    {
+        if (inputs.Count > 0) SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+        Thread.Sleep(15);
+    }
+
+    static Dictionary<string, object> PressKeys(IntPtr hwnd, System.Collections.IEnumerable keys)
+    {
+        if (keys == null) return Error(null, "no keys");
+        foreach (object item in keys)
+        {
+            if (hwnd == IntPtr.Zero || GetForegroundWindow() != hwnd) return Error(null, "the app is not in front");
+            string key = Convert.ToString(item);
+            if (key.StartsWith("wait:")) { Thread.Sleep(Math.Min(2000, int.Parse(key.Substring(5)))); continue; }
+            var inputs = new List<INPUT>();
+            if (key.StartsWith("text:"))
+            {
+                foreach (char c in key.Substring(5))
+                {
+                    inputs.Add(Key(0, c, KEY_UNICODE));
+                    inputs.Add(Key(0, c, KEY_UNICODE | KEY_UP));
+                }
+                Send(inputs);
+                continue;
+            }
+            var parts = key.ToLowerInvariant().Split('+');
+            var codes = new List<ushort>();
+            foreach (string part in parts)
+            {
+                ushort code;
+                if (keyCodes.TryGetValue(part, out code)) codes.Add(code);
+                else if (part.Length == 1 && char.IsLetterOrDigit(part[0])) codes.Add((ushort)char.ToUpperInvariant(part[0]));
+                else return Error(null, "unknown key: " + part);
+            }
+            foreach (ushort code in codes) inputs.Add(Key(code, 0, 0));
+            for (int i = codes.Count - 1; i >= 0; i--) inputs.Add(Key(codes[i], 0, KEY_UP));
+            Send(inputs);
+        }
+        return new Dictionary<string, object> { { "ok", true } };
+    }
+
+    // Apps built on Chromium (VS Code, Teams, Slack...) refuse UI Automation calls for a moment while their screen
+    // is changing, e.g. right after a menu item is clicked (COM error 0x80040201). A moment later the same read
+    // works, so a failed read is tried again before it counts as "can't read this app".
+    const int SnapshotTries = 3;
+    const int SnapshotRetryMs = 150;
+
+    static Dictionary<string, object> SnapshotWithRetry(IntPtr hwnd)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var reply = Snapshot(hwnd);
+                bool emptyAfterError = reply.ContainsKey("elements") && ((List<object>)reply["elements"]).Count == 0 && reply.ContainsKey("skipError") && reply["skipError"] != null;
+                if (!emptyAfterError || attempt >= SnapshotTries) return reply;
+            }
+            catch (COMException)
+            {
+                if (attempt >= SnapshotTries) throw;
+            }
+            Thread.Sleep(SnapshotRetryMs);
+        }
     }
 
     static Dictionary<string, object> Snapshot(IntPtr hwnd)
