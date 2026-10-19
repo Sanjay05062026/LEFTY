@@ -98,3 +98,34 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 @keyframes ring-hit { 0% { transform: scale(1); } 40% { transform: scale(1.15); } 100% { transform: scale(1); } }
 @keyframes wiggle { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-6deg) scale(1.08); } 40% { transform: rotate(5deg) scale(1.08); } 60% { transform: rotate(-3deg); } 80% { transform: rotate(2deg); } }
 @keyframes shake { 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+
+/* A question with answer buttons in Lefty's chat ("VS Code isn't open. Shall I open it?") */
+.msg .choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.msg .choices button { font-size: 13px; padding: 5px 12px; border-radius: 99px; background: #fff; color: #0F3D39; border: 1px solid #99F6E4; cursor: pointer; }
+.msg .choices button.primary { background: #0D9488; color: #fff; border-color: #0D9488; }
+.msg .choices button:hover { filter: brightness(0.95); }
+.msg .choices button:disabled { opacity: .5; cursor: default; }
+
+/* Ghost code: faint code at the user's text cursor in their editor, to type over (like an inline suggestion).
+   The layer covers the editor's area and clips to it; font and line height are copied from the editor. */
+.ghost { position: absolute; overflow: hidden; pointer-events: none; opacity: 0; transition: opacity .15s; }
+.ghost.show { opacity: 1; }
+.ghost .gline { position: absolute; white-space: pre; color: rgba(94,234,212,.62); font-feature-settings: "liga" 0, "calt" 0; }
+.ghost .gline.current { color: rgba(94,234,212,.8); }
+.ghost .gline .next { color: #5EEAD4; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.ghost .gline.enter { color: #5EEAD4; opacity: .85; }
+.ghost.light .gline { color: rgba(13,148,136,.55); }
+.ghost.light .gline.current { color: rgba(13,148,136,.75); }
+.ghost.light .gline .next, .ghost.light .gline.enter { color: #0D9488; }
+
+/* Code shown in the chat when ghost code can't be drawn (an editor Lefty can't follow) */
+.msg.has-code { max-width: 100%; }
+.msg pre.code { margin-top: 8px; padding: 8px 10px; max-height: 300px; overflow: auto; border-radius: 8px; background: #0F172A; color: #E2E8F0;
+  font: 12px/1.45 Consolas, "Courier New", monospace; white-space: pre; user-select: text; }
+
+/* The code doctor's ring around wrong code: red, pulsing red */
+.ring.show.error { border-color: #EF4444; animation: ring-in .35s cubic-bezier(.34,1.56,.64,1), ring-pulse-red 1.6s .35s ease-in-out infinite; }
+@keyframes ring-pulse-red { 0%, 100% { box-shadow: 0 0 0 4px rgba(239,68,68,.28), 0 0 22px 4px rgba(239,68,68,.4); } 50% { box-shadow: 0 0 0 8px rgba(239,68,68,.12), 0 0 30px 8px rgba(239,68,68,.25); } }
+/* The code doctor's fix beside the wrong line: on a dark backing, so it reads over the editor's own inline messages */
+.ghost .gline.fixline { background: rgba(15,23,42,.92); border-radius: 4px; padding: 0 6px; margin-left: -6px; color: #5EEAD4; }
+.ghost.light .gline.fixline { background: rgba(240,253,250,.95); color: #0F766E; }

@@ -18,7 +18,7 @@ async function waitFor(read, isDone, timeoutMs, what) {
   throw new Error(`timed out waiting for ${what} (last value: ${JSON.stringify(value)})`);
 }
 
-async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarget }) {
+async function run({ app, mainWindow, overlayWindow, showLefty, toDip, handleClick, getTarget }) {
   const js = (code) => overlayWindow.webContents.executeJavaScript(code);
   const submit = (text) => js(`document.getElementById('goal').value = ${JSON.stringify(text)}; document.getElementById('ask').requestSubmit(); true`);
   const lastMessage = () => js("document.querySelector('#messages .msg:last-child').textContent");
@@ -55,6 +55,15 @@ async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarge
     check(start, 'Start button exists in the taskbar read');
     const expected = toDip(start.rect);
     const origin = overlayWindow.getBounds();
+    // Taskbar icons are centred, so they slide sideways whenever a taskbar button comes or goes during the test (the
+    // self-test's own Electron starting next to a running Lefty does it): compare with a fresh read, and allow one
+    // such slide. Start and Search are far further apart than that, so a wrong button still fails.
+    const sameButton = (a, b) => Boolean(a && b) && Math.abs(a.x - b.x) <= 16 && Math.abs(a.y - b.y) <= 2
+      && Math.abs(a.w - b.w) <= 2 && Math.abs(a.h - b.h) <= 2;
+    const whereNow = async (name) => {
+      const now = (await eyes.snapshot(hwnd)).elements.find((el) => el.name === name);
+      return now ? toDip(now.rect) : null;
+    };
 
     // Read the positions Lefty set, not the painted ones: a hidden window never plays the zoom/glide animations.
     const state = await js(`(() => {
@@ -109,7 +118,9 @@ async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarge
     const messagesAtStart = await messageCount();
     check(/^1\/2Start$/.test(await waitForTag(/1\/2/, 'step 1 tag')), 'guide starts: the tag shows "1/2 · Start"');
     await waitFor(async () => getTarget(), Boolean, 2000, 'the click target');
-    check(JSON.stringify(getTarget()) === JSON.stringify(expected), 'click checking watches the Start button');
+    const watched = getTarget();
+    const startNow = await whereNow('Start');
+    check(sameButton(watched, startNow), `click checking watches the Start button (${JSON.stringify(watched)} vs read ${JSON.stringify(startNow)})`);
 
     handleClick({ x: origin.x + 5, y: origin.y + 5 }); // far away from Start
     await waitFor(() => js("document.getElementById('steptag').dataset.nudges"), (n) => Number(n) >= 1, 6000, 'the tag to wiggle after a missed click');
@@ -120,7 +131,9 @@ async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarge
     handleClick(startPoint); // double-click: must not finish two steps
     check(/^2\/2Search$/.test(await waitForTag(/2\/2/, 'step 2 tag')), 'clicking Start moves on: the tag shows "2/2 · Search"');
     await waitFor(async () => getTarget(), Boolean, 2000, 'the second click target');
-    check(JSON.stringify(getTarget()) === JSON.stringify(searchRect), 'click checking now watches the Search button');
+    const watchedNext = getTarget();
+    const searchNow = await whereNow('Search');
+    check(sameButton(watchedNext, searchNow), `click checking now watches the Search button (${JSON.stringify(watchedNext)} vs read ${JSON.stringify(searchNow)})`);
     check(await bubbleTucked() && (await messageCount()) === messagesAtStart, 'the whole guide ran on screen: no chat messages, bubble tucked');
 
     handleClick(centre(getTarget()));
@@ -166,6 +179,33 @@ async function run({ app, overlayWindow, showLefty, toDip, handleClick, getTarge
     await hover(at(5, 700, 1, 1));
     await waitFor(guardState, (s) => !s.show, 2000, 'the guard to clear in empty space');
     check(true, 'empty space clears the warning');
+
+    // Fullscreen apps (games) get Ctrl+Space: the screen reader must tell them apart from normal windows.
+    // Asked about hidden test windows by handle, so nothing appears on screen.
+    const { BrowserWindow, screen } = require('electron');
+    const handleOf = (win) => {
+      const buffer = win.getNativeWindowHandle();
+      return buffer.length >= 8 ? Number(buffer.readBigUInt64LE(0)) : buffer.readUInt32LE(0);
+    };
+    // Like a game: no title bar at all (Electron's plain frameless windows keep a hidden one, games don't).
+    const bounds = screen.getPrimaryDisplay().bounds;
+    const game = new BrowserWindow({ ...bounds, show: false, frame: false, thickFrame: false });
+    const framed = new BrowserWindow({ ...bounds, show: false });
+    game.setBounds(bounds); // Windows trims new windows to the area above the taskbar
+    framed.setBounds(bounds);
+    const gameMode = await eyes.screenMode(handleOf(game));
+    check(gameMode.fullscreen, 'a borderless window covering the screen counts as fullscreen (Ctrl+Space would pause)');
+    const framedMode = await eyes.screenMode(handleOf(framed));
+    check(!framedMode.fullscreen, 'a window with a title bar does not, even when it fills the screen');
+    const homeMode = await eyes.screenMode(handleOf(mainWindow));
+    check(!homeMode.fullscreen, "a normal window like Lefty's home screen does not");
+    game.destroy();
+    framed.destroy();
+
+    // Closing the home window keeps Lefty running.
+    mainWindow.close();
+    await sleep(200);
+    check(!mainWindow.isDestroyed() && !mainWindow.isVisible(), 'closing the home window hides it; Lefty keeps running');
 
     console.log('[selftest] All Ctrl+Space checks passed.');
     app.exit(0);
