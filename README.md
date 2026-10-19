@@ -12,6 +12,7 @@ This is an early version. What is here is the starting point of the idea, not th
 - Support for several monitors
 - Remembering earlier requests, so follow-up questions work
 - A smoother pointing animation and an optional mode where Lefty stays next to the mouse
+- Code features (ghost code, finding and fixing errors) in other code editors, not only VS Code
 - A hosted backend, a Windows installer and a signed release
 
 ## Requirements
@@ -64,6 +65,8 @@ Each check below says what to do and what should happen.
 | VS Code | Type `what is this app` | He answers in the chat. |
 
 ### Code features in VS Code
+
+The code features are meant for every code editor. For now they are built and tested for VS Code only (editors based on it, such as Cursor, should also work); support for other editors is planned.
 
 | What to do | What should happen |
 | --- | --- |
