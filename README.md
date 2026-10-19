@@ -4,6 +4,16 @@ Lefty is an on-screen assistant for Windows. Press Ctrl+Space in any app, say wh
 
 It is a desktop app (Electron) plus an optional small backend that holds the AI key, so people who install Lefty don't need a key of their own.
 
+## Project status
+
+This is an early version. What is here is the starting point of the idea, not the finished product: the core loop (understand the goal, read the screen, point at the next step, check it was done) works, and the features below are the first ones built on top of it. Planned next:
+
+- Voice: hold a key, ask out loud, and hear the answer
+- Support for several monitors
+- Remembering earlier requests, so follow-up questions work
+- A smoother pointing animation and an optional mode where Lefty stays next to the mouse
+- A hosted backend, a Windows installer and a signed release
+
 ## Requirements
 
 - Windows 10 or 11
@@ -42,21 +52,7 @@ Closing the window keeps Lefty running in the system tray. Right-click the tray 
 
 ## What to test
 
-Each check below says what to do and what should happen. Run them in order the first time; the later ones build on the AI connection.
-
-### Without the AI
-
-| Where | What to do | What should happen |
-| --- | --- | --- |
-| Any app | Press Ctrl+Space | Lefty appears next to the mouse and names the app you are in. Holding the keys down does not make him flicker. |
-| Notepad | Type `File` | Lefty flies to the File menu and puts a ring around it. |
-| Notepad | Type `File > Save as` | He guides you through both steps (tag shows 1/2, then 2/2) and coaches the Save dialog. |
-| Notepad, new tab | Type `save this` | He guides you to save the file and only says it is done once the save really happened. If you cancel the dialog, he guides you again. |
-| File Explorer | Rest the mouse on a Delete button | The button is flagged in amber before you click. Actions that can't be undone are flagged in red. |
-| Any app | Close the Lefty window | Lefty keeps running in the tray, and Ctrl+Space still works. |
-| A fullscreen game | Press Ctrl+Space | The key combination goes to the game, not to Lefty. |
-
-### With the AI
+Each check below says what to do and what should happen.
 
 | Where | What to do | What should happen |
 | --- | --- | --- |
