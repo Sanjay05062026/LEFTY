@@ -460,6 +460,12 @@ async function nextStep({ goal, history, note, app, title, elements, display, jp
   if (step.status === 'step' && step.action === 'write_code' && !cleanCode(step.code)) {
     ({ step, pointScale, usage } = await ask(`${text}\n\nYour last answer was write_code but code was empty. Put the whole code in code.`));
     target = targetOf(step, pointScale);
+    // Still nothing: the screenshot and the element list are taking the room the code needed, so ask for the
+    // code by itself. Better than telling the user to ask again, which is what he used to do.
+    if (!cleanCode(step.code)) {
+      const only = await writeCode({ request: step.text || step.instruction || goal, fileName: title }).catch(() => '');
+      if (only) step = { ...step, code: only };
+    }
   }
   // "Done" while pointing at something nobody clicked yet (seen from the weaker backup models: "done" with the
   // Standard Calculator item still to click) is a contradiction: ask once more which it is.
@@ -586,6 +592,33 @@ function cleanFix(value) {
   }
   if (lines.every((l) => /^\s*\d+\| ?/.test(l) || !l.trim())) lines = lines.map((l) => l.replace(/^\s*\d+\| ?/, ''));
   return lines.map((l) => l.replace(/\s+$/, '')).join('\n');
+}
+
+/* ---------- Code on its own ----------
+   Asking for the next step means sending a screenshot, every clickable thing on screen and the steps so far, and
+   the answer has to fit in one budget alongside all that. Code is the one answer that can be long, and when it
+   did not fit, "code" came back empty and Lefty said he couldn't write it. This asks for nothing but the code:
+   no screenshot, no element list, a far bigger budget, so there is room for the whole thing. */
+const CODE_SYSTEM = `You write code for a beginner to type over, as faint text at their cursor. Answer with the
+complete, correct, runnable code and nothing else: no markdown fences, no explanation around it, 4-space indents,
+short lines, a few short comments where they help. Use the language the user asks for, else the one the open file
+suggests, else Python. Keep it under 60 lines unless the request plainly needs more.`;
+
+// Just the code for a request like "single linked list in python". Returns '' when even this comes back empty.
+async function writeCode({ request, fileName = '', lang = '' }) {
+  if (!ready()) throw new Error('no API key');
+  const text = [
+    `Write: ${request}`,
+    fileName ? `The open file is ${fileName}, so use its language.` : '',
+    lang ? `Any comments in: ${lang}` : '',
+  ].filter(Boolean).join('\n');
+  const { answer } = await geminiJson({
+    system: CODE_SYSTEM,
+    parts: [{ text }],
+    schema: { type: 'object', properties: { code: { type: 'string', description: 'the whole code, plain text with real line breaks' } }, required: ['code'] },
+    maxTokens: 16384,
+  });
+  return cleanCode(answer && answer.code);
 }
 
 // code: the whole file. Returns { problems: [{ line, endLine, message, fixed }], summary, usage }, problems in line
@@ -715,4 +748,4 @@ async function warmUp() {
 function useFetch(fake) { fetchImpl = fake; warmedAt = 0; restingUntil.clear(); retired.clear(); }
 function useHedge(ms) { hedgeMs = ms; }
 
-module.exports = { ready, nextStep, checkCode, explain, buildProject, safePath, warmUp, describeElements, cleanCode, cleanFix, label, provider, setting, useFetch, useHedge };
+module.exports = { ready, nextStep, writeCode, checkCode, explain, buildProject, safePath, warmUp, describeElements, cleanCode, cleanFix, label, provider, setting, useFetch, useHedge };

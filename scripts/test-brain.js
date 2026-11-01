@@ -245,6 +245,22 @@ const jpeg = Buffer.from('fake image');
   step = await ask({ goal: 'hello world' });
   check(calls.length === 2 && /code was empty/.test(calls[1].body.contents[0].parts[1].text) && step.code === 'print(1)', 'a code answer without code is asked again');
 
+  // A write_code answer with no code: asked again, and if the step request still has no room for it, the code
+  // is asked for on its own. Lefty saying "I couldn't write that code, ask me again" was this giving up.
+  calls = [];
+  plan = { 'gemini-3.6-flash': [
+    { reply: geminiAnswer({ status: 'step', action: 'write_code', instruction: 'Type along', code: '' }) },
+    { reply: geminiAnswer({ status: 'step', action: 'write_code', instruction: 'Type along', code: '' }) },
+    { reply: geminiAnswer({ code: 'def linear_search(a, t):\n    return -1' }) },
+  ] };
+  step = await ask({ goal: 'linear search in python', title: 'main.py - PyCharm' });
+  check(calls.length === 3 && step.code === 'def linear_search(a, t):\n    return -1',
+    'code that would not fit in the step answer is asked for on its own');
+  check(!calls[2].body.contents[0].parts.some((part) => part.inlineData)
+    && calls[2].body.generationConfig.maxOutputTokens > 8192
+    && /Write: /.test(calls[2].body.contents[0].parts[0].text),
+  'that last ask carries no screenshot, so the whole budget is the code');
+
   // Code doctor: the file goes with line numbers; answers are checked against it.
   calls = [];
   const buggy = 'a = 2\nb==2\n\na + b';
