@@ -7,6 +7,7 @@ const Focus = require('./overlay/focus');
 const brain = require('./brain');
 const remoteBrain = require('./brain-remote');
 const apps = require('./apps');
+const editors = require('./editors');
 const snap = require('./snap');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
@@ -498,6 +499,20 @@ ipcMain.on('lefty:focus-app', () => {
     .then((result) => console.log(`[lefty] handed focus back to the app (${result.focused ? `ok via ${result.method}` : `Windows refused, attached=${result.attached}`})`))
     .catch((error) => console.log('[lefty] could not hand focus back:', error.message));
 });
+// The same, but waited for: used when a step failed because the app had slipped behind something, so Lefty can
+// put it back in front and carry on rather than giving the task up.
+ipcMain.handle('lefty:focus-goal-app', async () => {
+  if (SELFTEST) return { ok: false };
+  try {
+    const result = await focusApp(readHwnd);
+    console.log(`[lefty] brought the app back to the front (${result.focused ? `ok via ${result.method}` : 'Windows refused'})`);
+    return { ok: Boolean(result.focused) };
+  } catch (error) {
+    console.log('[lefty] could not bring the app back:', error.message);
+    return { ok: false };
+  }
+});
+
 // After a step, the screen changes (a menu opens, a dialog appears): look again.
 ipcMain.handle('lefty:rescan', async (_event, options) => {
   const seen = await readApp(readHwnd);
@@ -560,7 +575,7 @@ ipcMain.on('ghost:stop', stopGhost);
 
 // The editor's font, so ghost code lines up with the real text: VS Code's defaults unless the user's settings say
 // otherwise (VS Code's cousins keep the same settings file in their own folder).
-const EDITOR_FOLDERS = { code: 'Code', 'code - insiders': 'Code - Insiders', cursor: 'Cursor', windsurf: 'Windsurf', vscodium: 'VSCodium' };
+// Which editor is which, and what each one needs, lives in src/editors.js.
 
 // settings.json allows comments and trailing commas; plain JSON doesn't.
 function readJsonc(file) {
@@ -587,24 +602,12 @@ function readJsonc(file) {
 }
 
 function editorFont(processName) {
-  const folder = EDITOR_FOLDERS[String(processName || '').toLowerCase()];
+  const folder = editors.settingsFolder(processName);
   let settings = {};
   try {
     if (folder) settings = readJsonc(path.join(process.env.APPDATA || '', folder, 'User', 'settings.json'));
   } catch { /* no settings file, or one that can't be read: the editor's defaults */ }
-  const number = (value, fallback) => (Number.isFinite(value) ? value : fallback);
-  const fontSize = number(settings['editor.fontSize'], 14);
-  const setLine = number(settings['editor.lineHeight'], 0);
-  // VS Code's rule: 0 means 1.35 x the font size (on Windows), below 8 is a multiple of the font size.
-  const lineHeight = Math.round(setLine === 0 ? fontSize * 1.35 : setLine < 8 ? setLine * fontSize : setLine);
-  const zoom = 1.2 ** number(settings['window.zoomLevel'], 0);
-  return {
-    fontFamily: settings['editor.fontFamily'] || "Consolas, 'Courier New', monospace",
-    fontSize: fontSize * zoom,
-    lineHeight: lineHeight * zoom,
-    letterSpacing: number(settings['editor.letterSpacing'], 0) * zoom,
-    light: /light/i.test(settings['workbench.colorTheme'] || ''),
-  };
+  return editors.fontOf(processName, settings);
 }
 
 ipcMain.handle('lefty:editor-font', (_event, processName) => editorFont(processName));
@@ -640,22 +643,24 @@ function restoreClipboard(saved) {
 async function editorInFront() {
   const first = await eyes.caret(doctorHwnd || readHwnd);
   const hwnd = first.hwnd;
-  if (!EDITOR_FOLDERS[String(first.process || '').toLowerCase()] && first.process) return { error: 'not-editor', process: first.process };
+  if (first.process && !editors.isKnown(first.process) && !(first.line && first.ln)) return { error: 'not-editor', process: first.process };
   await focusApp(hwnd).catch(() => {});
   await sleep(120);
   let caret = await eyes.caret(hwnd);
   if (!caret.inFront) return { error: 'not-front' };
-  if (!EDITOR_FOLDERS[String(caret.process || '').toLowerCase()]) return { error: 'not-editor', process: caret.process };
-  if (!caret.line) { // focus is in a side panel: Ctrl+1 goes back to the code
+  const knownEditor = editors.isKnown(caret.process);
+  if (!caret.line && knownEditor) { // focus is in a side panel: Ctrl+1 goes back to the code
     await press(hwnd, ['ctrl+1', 'wait:200']);
     caret = await eyes.caret(hwnd);
   }
-  if (!caret.line || !caret.ln) return { error: 'no-cursor' };
+  // An editor Lefty has no entry for is still worked in, as long as it says where the cursor is - that is the
+  // one thing only a real text editor reports, so he can never paste into something that merely looks like one.
+  if (!caret.line || !caret.ln) return { error: knownEditor ? 'no-cursor' : 'not-editor', process: caret.process };
   doctorHwnd = hwnd;
   return { hwnd, caret };
 }
 
-const goToKeys = (line, col) => ['ctrl+g', 'wait:150', `text:${line}:${col}`, 'wait:80', 'enter', 'wait:150'];
+const goToKeys = (process, line, col) => editors.gotoKeys(process, line, col);
 
 ipcMain.handle('doctor:read', async () => {
   if (SELFTEST) return { ok: false, error: 'self-test' };
@@ -679,7 +684,7 @@ ipcMain.handle('doctor:read', async () => {
       code = clipboard.readText();
     } finally {
       restoreClipboard(saved);
-      await press(at.hwnd, goToKeys(at.caret.ln, at.caret.col)).catch(() => {}); // back where the user was, selection gone
+      await press(at.hwnd, goToKeys(at.caret.process, at.caret.ln, at.caret.col)).catch(() => {}); // back where the user was, selection gone
     }
     if (code === marker) return { ok: false, error: 'no-copy' };
     // The editor's own problem count, as a hint for the AI ("Errors: 1, Warnings: 2").
@@ -714,7 +719,7 @@ ipcMain.handle('doctor:goto', async (_event, { line, col = 1 }) => {
   try {
     const at = await editorInFront();
     if (at.error) return { ok: false, error: at.error };
-    await press(at.hwnd, goToKeys(line, col));
+    await press(at.hwnd, goToKeys(at.caret.process, line, col));
     await sleep(120);
     const caret = await eyes.caret(at.hwnd);
     if (!caret.line || caret.ln !== line) return { ok: false, error: 'not-there' };
@@ -728,7 +733,7 @@ ipcMain.handle('doctor:goto', async (_event, { line, col = 1 }) => {
 });
 
 // Selects lines line..endLine whole (from column 1 to the end of the last one).
-const selectKeys = (line, endLine) => [...goToKeys(line, 1), ...Array(Math.max(0, endLine - line)).fill('shift+down'), 'shift+end', 'wait:60'];
+const selectKeys = (process, line, endLine) => [...goToKeys(process, line, 1), ...Array(Math.max(0, endLine - line)).fill('shift+down'), 'shift+end', 'wait:60'];
 
 // Pastes text over lines line..endLine: "Fix it for me", or the indent that's left when the user retypes a line.
 async function replaceLines({ line, endLine, text }) {
@@ -738,9 +743,9 @@ async function replaceLines({ line, endLine, text }) {
   try {
     if (text) {
       clipboard.writeText(text);
-      await press(at.hwnd, [...selectKeys(line, endLine), 'ctrl+v', 'wait:200']);
+      await press(at.hwnd, [...selectKeys(at.caret.process, line, endLine), 'ctrl+v', 'wait:200']);
     } else {
-      await press(at.hwnd, [...selectKeys(line, endLine), 'delete', 'wait:100']);
+      await press(at.hwnd, [...selectKeys(at.caret.process, line, endLine), 'delete', 'wait:100']);
     }
   } finally {
     restoreClipboard(saved);
@@ -800,12 +805,28 @@ async function autoDo(what, work) {
 
 const centreOf = (rect) => screen.dipToScreenPoint({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
 
+/* A plain left click is tried first through UI Automation, which presses the control the way a screen reader
+   does: the pointer stays where the user left it, and the window does not have to be in front - so Lefty can
+   work in a window behind the one they are typing in. Not everything can be pressed that way (canvases, custom
+   toolbars, most of a Java app), and a right-click or a double-click is a mouse gesture by definition, so those
+   and anything that comes back "no-pattern" fall through to the real click, exactly as before. */
 ipcMain.handle('auto:click', async (_event, { rect, button = 'left', count = 1, expect = '' }) => {
   if (SELFTEST) { autoActions.push({ act: 'click', rect, button, count, expect }); return { ok: true }; }
   const point = centreOf(rect);
   const how = count === 2 ? 'double-click' : button === 'right' ? 'right-click' : 'click';
-  return autoDo(`${how} ${expect ? `"${expect}"` : 'a spot'} at ${point.x},${point.y}`,
-    () => eyes.click(lastAppHwnd, { ...point, button, count, expect }));
+  const what = `${how} ${expect ? `"${expect}"` : 'a spot'} at ${point.x},${point.y}`;
+  if (button === 'left' && count === 1) {
+    try {
+      const pressed = await eyes.press(lastAppHwnd, { ...point, expect });
+      if (pressed && pressed.ok) {
+        console.log(`[lefty] pressed ${expect ? `"${pressed.name || expect}"` : 'a spot'} without the mouse (${pressed.how})`);
+        return { ok: true, quiet: true };
+      }
+    } catch (error) {
+      if (!/no-pattern/.test(error.message)) console.log(`[lefty] could not press quietly: ${error.message}`);
+    }
+  }
+  return autoDo(what, () => eyes.click(lastAppHwnd, { ...point, button, count, expect }));
 });
 
 // What's under the middle of a rect, before Lefty clicks a spot the AI guessed: { name, type } or null.

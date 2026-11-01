@@ -269,14 +269,14 @@ async function geminiCandidates(apiKey) {
 async function askModel(model, apiKey, body, signal, { long = false } = {}) {
   for (;;) {
     const lightest = thinkingFor.get(model) || 'minimal';
-    const level = long && lightest !== 'none' ? 'medium' : lightest;
+    const level = long && lightest !== 'none' ? 'high' : lightest;
     const request = { ...body, generationConfig: { ...body.generationConfig } };
     if (level !== 'none') request.generationConfig.thinkingConfig = { thinkingLevel: level };
     let data;
     try {
       data = await geminiCall(model, apiKey, request, signal, long ? LONG_TIMEOUT_MS : TIMEOUT_MS);
     } catch (error) {
-      if (error.status === 400 && /thinking/i.test(error.message) && long && level === 'medium') { long = false; continue; } // no thinking choice here: as usual
+      if (error.status === 400 && /thinking/i.test(error.message) && long && level === 'high') { long = false; continue; } // no thinking choice here: as usual
       if (error.status === 400 && /thinking/i.test(error.message) && level !== 'none') {
         thinkingFor.set(model, level === 'minimal' ? 'low' : 'none'); // this model can't think that little: one step up
         continue;
@@ -367,13 +367,16 @@ async function askGemini({ text, jpeg, audio }) {
 }
 
 // One JSON answer shaped by schema, from the best Gemini model that answers (see geminiCandidates and raceModels).
-async function geminiJson({ system, parts, schema, maxTokens = 8192, long = false }) {
+async function geminiJson({ system, parts, schema, maxTokens = 8192, long = false, temperature = 0.2 }) {
   const apiKey = setting('GEMINI_API_KEY');
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts }],
     generationConfig: {
-      temperature: 0.2,
+      // 0.2 for a step on screen, where there is one right button and no room for invention. Building a project
+      // is the opposite: at 0.2 the same request returns almost the same files every time, so asking again after
+      // "make it better" gave back what it gave before. Designs want room to differ.
+      temperature,
       maxOutputTokens: maxTokens, // room for the model's own thinking, and for fixed code
       responseMimeType: 'application/json',
       responseSchema: geminiSchema(schema),
@@ -628,7 +631,10 @@ Never shrink a big request into a toy, and build every feature the user names. A
 index.html in a browser: plain HTML, CSS and JavaScript linked by relative paths, no build step, unless the user asks
 for a framework. For other projects add a short README.md saying how to run it, and the files a beginner needs (e.g.
 requirements.txt or package.json). When files already exist, keep their style and change only what the request needs;
-leave untouched files out. Never write secrets, keys or passwords into files. At most 25 files. summary: one or two
+leave untouched files out. Never write secrets, keys or passwords into files. At most 25 files. When the folder already holds a project you
+built and the user asks again - "make it better", "more complex", "redesign it" - do not hand back what is already
+there: take it further. Add the pages, features and polish that are missing, change the layout and the look, and
+make the result clearly better than what they had, not a reshuffle of it. summary: one or two
 short sentences on what you made. run: one short line on how to open or run it. Write summary and run in the
 language given by lang. Never use emoji in them.`;
 
@@ -675,7 +681,7 @@ async function buildProject({ request, files = [], lang = '' }) {
     shown.length ? `Files already in the folder:\n${shown.join('\n')}` : 'The folder is empty.',
     `lang: ${lang || 'en'}`,
   ].join('\n\n');
-  const { answer, usage } = await geminiJson({ system: BUILD_SYSTEM, parts: [{ text }], schema: BUILD_SCHEMA, maxTokens: 65536, long: true });
+  const { answer, usage } = await geminiJson({ system: BUILD_SYSTEM, parts: [{ text }], schema: BUILD_SCHEMA, maxTokens: 65536, long: true, temperature: 0.95 });
   const out = new Map();
   for (const f of Array.isArray(answer.files) ? answer.files : []) {
     const path = safePath(f && f.path);

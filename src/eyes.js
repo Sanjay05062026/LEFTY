@@ -156,6 +156,13 @@ function click(hwnd, { x, y, button = 'left', count = 1, expect = '' }) {
   return request({ cmd: 'click', hwnd, x: Math.round(x), y: Math.round(y), button, count, expect });
 }
 
+// Presses what is at that point through UI Automation: no mouse pointer, and the window need not be in front.
+// Comes back { ok, how, name } when it worked, or an error "no-pattern" when that control cannot be pressed
+// this way and a real click is the only option.
+function press(hwnd, { x, y, expect = '' }) {
+  return request({ cmd: 'press', hwnd, x: Math.round(x), y: Math.round(y), expect });
+}
+
 function type(hwnd, text) {
   return request({ cmd: 'type', hwnd, text: String(text) });
 }
@@ -225,4 +232,4 @@ function stop() {
   ready = null;
 }
 
-module.exports = { start, snapshot, focusApp, windows, caret, keys, click, type, scroll, peek, front, closeWindow, screenMode, onScreenMode, appName, stop };
+module.exports = { start, snapshot, focusApp, windows, caret, keys, click, press, type, scroll, peek, front, closeWindow, screenMode, onScreenMode, appName, stop };

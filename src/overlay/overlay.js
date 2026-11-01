@@ -437,9 +437,9 @@ const modeChip = document.getElementById('modechip');
 const AUTO_SHOW_MS = 600;        // the glide to the target, before the click
 const AUTO_IDLE_MS = 1500;       // after the user's own turn, how long they must have stopped before Lefty acts
 const AUTO_IDLE_WAIT_MAX_MS = 8000; // ...but he gets on with it after this, however busy they stay
-const AUTO_MAX_SAME = 3;         // the same click this many times with nothing moving on: it isn't working
+const AUTO_MAX_SAME = 6;         // the same click this many times with nothing moving on: it isn't working
 const AUTO_GRACE_MS = 600;       // the key that sent the goal may arrive just after the job starts: not a stop
-const AUTO_MAX_FAILS = 2;        // failed tries at one step before the user is asked to do it
+const AUTO_MAX_FAILS = 6;        // failed tries at one step before the user is asked to do it
 let settings = { mode: 'learn', size: 'normal', speak: 'off', privateApps: [] };
 let lastUserInputAt = 0;
 
@@ -576,7 +576,7 @@ async function autoStep(decision) {
     if (current.target && current.target.type === 'Spot' && (plan.act === 'click' || plan.act === 'type')) {
       const under = await api.autoPeek(current.target.rect);
       if (!still()) return;
-      if (!LeftyAuto.spotOk(current.label, under)) {
+      if (!LeftyAuto.spotOk(current.label, under, lastSeen.length === 0)) {
         api.log(`do it: the guessed spot for ${current.id} is on ${under.type} "${under.name}", not what the step names`);
         yourTurn(current, 'cant');
         return;
@@ -638,12 +638,26 @@ async function perform(thisJob, decision, plan) {
   }
 }
 
-function autoFailed(decision, error) {
+async function autoFailed(decision, error) {
   api.log(`do it: ${decision.id} failed (${error})`);
-  if (error === 'covered') { stopAuto('covered', "Another window is in the way, so I stopped."); return; }
-  if (error === 'not-front' || error === 'no-window') { stopAuto('not-front', "I couldn't get to the app, so I stopped."); return; }
-  if (error === 'password') { yourTurn(decision, 'private'); return; }
+  if (error === 'password') { yourTurn(decision, 'private'); return; } // he can't know the password anyway
+  const thisJob = job;
   job.autoFails = (job.autoFails || 0) + 1;
+  // Something in the way, or the app no longer in front: put that right and keep going. A task is not over
+  // because a window moved - the user would have to start again, which is worse than Lefty trying once more.
+  if (error === 'covered' || error === 'not-front' || error === 'no-window') {
+    if (job.autoFails < AUTO_MAX_FAILS) {
+      setStepTag('', 'Getting back to the app…');
+      await api.focusGoalApp();
+      if (job !== thisJob) return;
+      await sleep(400);
+      if (job !== thisJob) return;
+      reconsider(null);
+      return;
+    }
+    stopAuto(error, "I can't get back to the app, so I've stopped.");
+    return;
+  }
   if (job.autoFails >= AUTO_MAX_FAILS) { yourTurn(decision, 'cant'); return; }
   reconsider(null); // the screen moved on (or the target moved): look again
 }
@@ -765,10 +779,23 @@ api.onInput(({ kind }) => {
    (onCaret); ghost.js works out which line they're on and what's left; this draws it in the editor's own font,
    so every character lands where the real one will. Until they start typing, the code follows the cursor. */
 const ghostEl = document.getElementById('ghost');
-const GHOST_EDITORS = new Set(['code', 'code - insiders', 'cursor', 'windsurf', 'vscodium']); // VS Code and its cousins
-const NO_LN_COL_MS = 3000; // a known editor that never says "Ln, Col" (status bar hidden): show the code in the chat
+// Ghost code works in whatever editor answers. Lefty needs two things from one, both read through Windows UI
+// Automation: the rectangle of the cursor's line, and "Ln 12, Col 5" in its status bar. Any editor that reports
+// those is followed - listed in src/editors.js or not. One that stays quiet gets the code in the chat with the
+// reason why, which for the JetBrains IDEs is a setting they can turn on.
+const NO_LN_COL_MS = 3000;
 let ghostOn = false;
 let measureCanvas = null;
+
+// Why Lefty can't follow the cursor here, in words the user can act on.
+function noCursorHint(process) {
+  const editor = LeftyEditors.find(process);
+  if (editor && editor.needsAccessibility) {
+    return `Here's the code to type. (To draw it at your cursor in ${LeftyEditors.describe(process)}, turn on ${editor.needsAccessibility}.)`;
+  }
+  if (editor) return `Here's the code to type. (Show the Ln/Col in ${LeftyEditors.describe(process)}'s status bar and I can draw it at your cursor.)`;
+  return "Here's the code to type. (Your editor doesn't tell me where the cursor is, so I can't draw it there.)";
+}
 
 // options.gap: lines left free above the code before typing starts (1 for new code, 0 to retype a line in place);
 // options.onDone: what happens when it's all typed (default: the goal is done).
@@ -1082,15 +1109,17 @@ function doctorDone() {
 api.onCaret(async (caret) => {
   const g = job && job.ghost;
   if (!g || g.done || !caret.inFront) { if (g) ghostEl.classList.remove('show'); return; }
-  const editor = String(caret.process || '').toLowerCase();
-  if (!GHOST_EDITORS.has(editor)) {
-    api.log(`ghost: ${caret.process} is not an editor Lefty can follow; code goes in the chat`);
-    codeInChat(g.code, "Here's the code to type. (I can draw it right at your cursor in VS Code.)");
+  const waited = Date.now() - g.since > NO_LN_COL_MS;
+  if (!caret.line) {
+    ghostEl.classList.remove('show');
+    // A known editor with the focus in a side panel just needs a click back into the code. An app that never
+    // reports a cursor line is not somewhere Lefty can draw at all.
+    if (waited && !LeftyEditors.isKnown(caret.process)) { codeInChat(g.code, noCursorHint(caret.process)); return; }
+    setStepTag('', 'Click in your code file');
     return;
   }
-  if (!caret.line) { ghostEl.classList.remove('show'); setStepTag('', 'Click in your code file'); return; } // focus is in a side panel
   if (!caret.ln) {
-    if (Date.now() - g.since > NO_LN_COL_MS) codeInChat(g.code, "Here's the code to type. (Show the Ln/Col in VS Code's status bar and I can draw it at your cursor.)");
+    if (waited) codeInChat(g.code, noCursorHint(caret.process));
     return;
   }
   if (!g.font) {
@@ -1195,8 +1224,9 @@ function retreatToCorner() {
 const asSeen = (seen) => (seen && seen.ok ? seen : { ok: true, unread: true, elements: [], title: '', app: '' });
 
 // VS Code and its cousins, where Lefty can follow the text cursor and read the code.
-const isCodeEditor = (seen) => Boolean(seen && seen.ok) && (/^(VS Code|Cursor|Windsurf|VSCodium)$/.test(seen.app || '')
-  || / - (Visual Studio Code|Cursor|Windsurf|VSCodium)$/.test(seen.title || ''));
+// Any editor Lefty knows, by the app's name or its window title: where "find the error" goes straight to the
+// code doctor, and where his greeting offers to fix the problems the editor is showing.
+const isCodeEditor = (seen) => Boolean(seen && seen.ok) && LeftyEditors.isCodeEditor(seen);
 
 // The AI is told the mode, so in Do it mode it says exactly what to type. It says which language the user speaks,
 // which Lefty's voice and his explanations follow.

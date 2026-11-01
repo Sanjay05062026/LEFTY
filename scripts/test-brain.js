@@ -395,7 +395,10 @@ const jpeg = Buffer.from('fake image');
     'build: only files inside the folder are kept (no .., drives, .env, .git or Windows names), with plain line breaks');
   check(built.summary === 'A dark portfolio site.' && built.run === 'Open index.html in your browser.', 'build: a summary and one line on how to run it');
   check(/Build: a portfolio site/.test(buildText) && /--- README\.md\n# Old readme/.test(buildText), 'build: the AI sees what to build and the files already there');
-  check(calls[0].body.generationConfig.maxOutputTokens === 65536 && calls[0].body.generationConfig.thinkingConfig.thinkingLevel === 'medium', 'build: room for many files, and more thinking than a step');
+  check(calls[0].body.generationConfig.maxOutputTokens === 65536 && calls[0].body.generationConfig.thinkingConfig.thinkingLevel === 'high', 'build: room for many files, and the model\'s best thinking');
+  // A step on screen has one right answer; a design does not. At the step temperature the same request came
+  // back as near enough the same files every time, which is why "make it better" changed nothing.
+  check(calls[0].body.generationConfig.temperature > 0.8, `build: room to come back with something different (${calls[0].body.generationConfig.temperature})`);
   plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ summary: 'x', files: [{ path: '/etc/passwd', content: 'x' }] }) }] };
   error = await brain.buildProject({ request: 'x' }).catch((e) => e);
   check(error instanceof Error && /no files/.test(error.message), 'build: an answer with no usable file is an error');
