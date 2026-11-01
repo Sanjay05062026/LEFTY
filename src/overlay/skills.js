@@ -6,6 +6,9 @@
 //                           | { wait, thinking? } | { stuck } | { giveUp } | { say } | { done, message?, cancelled? }
 //   noteEvent(job, ev)   -> records what the user did: { type: 'click', hit, point, element, elements, decisionId }
 //                           | { type: 'key', combo } | { type: 'typing' } | { type: 'opened', app } | { type: 'coded' }
+//                           | { type: 'acted', decisionId } (Do it mode: Lefty typed or scrolled for the step himself)
+//                           | { type: 'resumed' } (the user stopped Lefty, maybe changed things, and let him go on)
+//                           Clicks and keys Lefty made himself in Do it mode carry auto: true.
 //
 // Standard Save/Open dialogs are coached for every goal (dialogs.js). Saving and typed paths are built in; any
 // other goal goes to the AI brain (aiSkill), which asks the AI for one step at a time.
@@ -27,7 +30,8 @@
       || /^[*●•]/.test(text) || /[*●•]\s*[-–—|]/.test(text) || /\*$/.test(text);
   }
 
-  // Shared by every job: a Save/Open dialog on screen is coached until it closes, then the skill continues.
+  // Shared by every job: a Save/Open dialog on screen is coached until it closes, then the skill continues. A
+  // recorded guide has its own steps for dialogs (ownsDialogs).
   function decide(job, seen) {
     const m = job.memory;
     const elements = seen.elements || [];
@@ -77,7 +81,7 @@
           if (j > i) m.index = j;
           return { id: `path:${j}`, kind: 'click', label: target.name || target.type, count: steps.length > 1 ? `${j + 1}/${steps.length}` : '', target };
         }
-        return { stuck: `I can't spot "${steps[i]}" right now. 🤔` };
+        return { stuck: `I can't spot "${steps[i]}" right now.` };
       },
     };
   }
@@ -97,24 +101,24 @@
       next(seen, m) {
         const title = seen.title || '';
         if (m.dialogSeen && !m.dialogOpen) {
-          if (!m.dialogCancelled && !looksUnsaved(title)) return { done: true, message: '🎉 Saved!' };
+          if (!m.dialogCancelled && !looksUnsaved(title)) return { done: true, message: 'Saved!' };
           m.dialogSeen = false; // cancelled, or still untitled: go round again
           m.dialogCancelled = false;
           m.saveAt = 0;
         }
         if (m.saveAt && !m.dialogSeen) {
           if (Date.now() - m.saveAt < DIALOG_WAIT_MS) return { wait: true }; // a Save dialog may be opening
-          if (!looksUnsaved(title)) return { done: true, message: '🎉 Saved!' };
+          if (!looksUnsaved(title)) return { done: true, message: 'Saved!' };
           m.saveAt = 0;
         }
         const elements = seen.elements || [];
         const saveAs = elements.find((el) => isSaveItem(el) && /^save as(\.\.\.|…)?$/i.test(nameOf(el)));
         const save = elements.find((el) => isSaveItem(el) && /^save(\.\.\.|…)?$/i.test(nameOf(el)));
         const pick = preferSaveAs ? (saveAs || save) : (save || saveAs);
-        if (pick) return { id: 'save:save', kind: 'click', label: `${nameOf(pick)} 💾`, target: pick };
+        if (pick) return { id: 'save:save', kind: 'click', label: `${nameOf(pick)}`, target: pick };
         const file = elements.find((el) => ['MenuItem', 'Button', 'TabItem'].includes(el.type) && /^file$/i.test(nameOf(el)));
         if (file) return { id: 'save:file', kind: 'click', label: 'File', target: file };
-        return { stuck: "I can't find a Save button here. Try Ctrl+S ⌨️" };
+        return { stuck: "I can't find a Save button here. Try Ctrl+S" };
       },
     };
   }
@@ -140,7 +144,10 @@
     return matches.reduce((best, el) => (distance(el.rect, target.rect) < distance(best.rect, target.rect) ? el : best));
   }
 
-  function aiSkill(goal, think, { now = Date.now } = {}) {
+  // A spoken goal (audio: { mime, data }) goes to the AI as the recording until the AI says what it heard; from then on
+  // the words it heard are the goal, and onHeard(words) lets the overlay show them.
+  function aiSkill(goal, think, { now = Date.now, audio = null, onHeard = null } = {}) {
+    let goalText = goal;
     function completeStep(m, done) {
       m.history.push(done);
       m.stepNo += 1;
@@ -153,7 +160,7 @@
     }
     function askBrain(m) {
       if (m.asks >= AI_MAX_ASKS) {
-        m.failed = "I seem to be going round in circles, so I'll stop here. 😅 Tell me the goal again and we'll start fresh.";
+        m.failed = "I seem to be going round in circles, so I'll stop here. Tell me the goal again and we'll start fresh.";
         return;
       }
       m.asks += 1;
@@ -161,14 +168,20 @@
       m.stale = false;
       const note = m.note;
       m.note = '';
+      const spoken = Boolean(audio) && !m.heard;
       let call;
-      try { call = Promise.resolve(think({ goal, history: m.history.slice(), note })); } catch (error) { call = Promise.reject(error); }
+      try { call = Promise.resolve(think({ goal: goalText, history: m.history.slice(), note, ...(spoken ? { audio } : {}) })); } catch (error) { call = Promise.reject(error); }
       call
         .then((answer) => {
+          if (answer && answer.ok && spoken && answer.heard) {
+            m.heard = answer.heard;
+            goalText = answer.heard;
+            if (onHeard) onHeard(answer.heard);
+          }
           if (answer && answer.ok) { m.answer = answer; m.offClicks = 0; }
-          else m.failed = (answer && answer.error) || 'My brain had a hiccup. 😵 Try again in a moment.';
+          else m.failed = (answer && answer.error) || 'The AI ran into a problem. Try again in a moment.';
         })
-        .catch(() => { m.failed = 'My brain had a hiccup. 😵 Try again in a moment.'; })
+        .catch(() => { m.failed = 'The AI ran into a problem. Try again in a moment.'; })
         .then(() => {
           m.pending = false;
           if (m.wake) m.wake();
@@ -180,6 +193,10 @@
       name: 'ai',
       wantsTyping: true,
       onEvent(m, event) {
+        if (event.type === 'resumed') { // the screen may be different now: look afresh
+          if (!m.pending) { m.note = 'the user stopped Lefty for a moment and may have changed things'; m.stale = true; }
+          return;
+        }
         const a = m.answer;
         if (m.pending || !a || a.status !== 'step' || m.stale) return;
         const isCurrent = event.decisionId === `ai:${m.stepNo}`;
@@ -189,13 +206,18 @@
           if (event.type === 'coded' && isCurrent) m.codeDone = true;
           return;
         }
+        const who = event.auto ? 'Lefty' : 'the user';
+        if (event.type === 'acted') { // Do it mode: Lefty typed (or scrolled) for this step himself
+          if (isCurrent) completeStep(m, a.action === 'type' ? `${stepText(a)} (done: Lefty typed "${a.text}" for the user)` : `${stepText(a)} (done by Lefty)`);
+          return;
+        }
         if (event.type === 'click') {
           if (event.hit && isCurrent) {
             if (a.action === 'type') { m.boxClicked = true; return; } // now they type
             // A guessed spot may have missed: the brain checks the screenshot instead of trusting the click.
             completeStep(m, a.target && a.target.type === 'Spot'
-              ? `${stepText(a)} (the user clicked the spot you guessed from the screenshot: check in the new screenshot that it really worked)`
-              : `${stepText(a)} (done: the user clicked "${a.target ? nameOf(a.target) : 'it'}")`);
+              ? `${stepText(a)} (${who} clicked the spot you guessed from the screenshot: check in the new screenshot that it really worked)`
+              : `${stepText(a)} (done: ${who} clicked "${a.target ? nameOf(a.target) : 'it'}")`);
             return;
           }
           const where = event.element && nameOf(event.element) ? ` on ${event.element.type} "${nameOf(event.element)}"` : '';
@@ -215,7 +237,8 @@
           return;
         }
         if (event.type === 'key') {
-          if (event.combo === 'Enter') completeStep(m, `${stepText(a)} (the user pressed Enter)`);
+          if (event.auto && a.action === 'key') completeStep(m, `${stepText(a)} (done: Lefty pressed ${event.combo})`);
+          else if (event.combo === 'Enter') completeStep(m, `${stepText(a)} (${who} pressed Enter)`);
           else if (event.combo === 'Escape') { m.note = 'the user pressed Escape'; m.stale = true; }
           else if (a.action === 'key') completeStep(m, `${stepText(a)} (the user pressed a shortcut)`);
           else if (/^Ctrl\+/.test(event.combo)) { m.note = `the user pressed ${event.combo}`; m.stale = true; }
@@ -233,24 +256,27 @@
           askBrain(m);
           return m.failed ? { giveUp: m.failed } : { wait: true, thinking: true };
         }
-        if (a.status === 'done') return { done: true, message: a.message ? `🎉 ${a.message}` : '🎉 Done!' };
-        if (m.codeDone) return { done: true, message: '🎉 You wrote it all yourself! Run it to see it work.' };
+        if (a.status === 'done') return { done: true, message: a.message ? `${a.message}` : 'Done!' };
+        if (m.codeDone) return { done: true, message: 'You wrote it all yourself! Run it to see it work.' };
         // An answer to a question, or a question back ("what should I tell you?"): said in the chat, no guide.
-        if (a.status === 'answer' || a.status === 'need_user') return { say: a.message || 'What would you like to do? 🙂' };
-        if (a.status !== 'step') return { giveUp: a.message || "I can't see how to do that here. 🤔" };
+        if (a.status === 'answer' || a.status === 'need_user') return { say: a.message || 'What would you like to do?' };
+        if (a.status !== 'step') return { giveUp: a.message || "I can't see how to do that here." };
 
         const id = `ai:${m.stepNo}`;
-        // The keys or text go on the tag too, unless the instruction already says them ("Press Ctrl+B ⌨️").
+        // The keys or text go on the tag too, unless the instruction already says them ("Press Ctrl+B").
         const says = (extra) => stepText(a).toLowerCase().includes(extra.toLowerCase());
-        const label = a.action === 'key' && a.text && !says(a.text) ? `${stepText(a)} ⌨️ ${a.text}`
+        const label = a.action === 'key' && a.text && !says(a.text) ? `${stepText(a)} ${a.text}`
           : a.action === 'type' && a.text && !says(a.text) ? `${stepText(a)}: "${a.text}"` : stepText(a);
-        if (a.action === 'open_app' && a.app) return { id, kind: 'open', app: a.app, label: a.instruction || `Open ${a.app} 🚀` };
-        if (a.action === 'check_code') return { id, kind: 'doctor', label: a.instruction || 'Checking your code 🩺' };
+        if (a.action === 'open_app' && a.app) return { id, kind: 'open', app: a.app, label: a.instruction || `Open ${a.app}` };
+        if (a.action === 'check_code') return { id, kind: 'doctor', label: a.instruction || 'Checking your code' };
+        if (a.action === 'focus') return { id, kind: 'focus', minutes: a.minutes || 0, allow: a.allow || [], label: a.instruction || 'Focus mode' };
+        if (a.action === 'build_project') return { id, kind: 'build', request: a.text || goalText, label: a.instruction || 'Building it' };
         if (a.action === 'write_code') {
-          return a.code ? { id, kind: 'code', code: a.code, label: a.instruction || 'Type along with me 👻' }
-            : { giveUp: "I couldn't write that code just now. 😕 Ask me again?" };
+          return a.code ? { id, kind: 'code', code: a.code, label: a.instruction || 'Type along with me' }
+            : { giveUp: "I couldn't write that code just now. Ask me again?" };
         }
-        if (!a.target) return { id, kind: 'tell', label };
+        const extra = { action: a.action, text: a.text || '' }; // Do it mode needs these: what to click or type
+        if (!a.target) return { id, kind: 'tell', label, ...extra };
         // When the app refused to be read just now, the chosen target can't be checked: keep pointing at it.
         const target = seen.unread ? a.target : locate(a.target, seen.elements || []);
         if (!target) {
@@ -260,7 +286,7 @@
         }
         m.misses = 0;
         const kind = a.action === 'type' ? 'type' : 'click';
-        return { id, kind, label, target };
+        return { id, kind, label, target, ...extra };
       },
     };
   }

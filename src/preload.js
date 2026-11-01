@@ -25,8 +25,51 @@ contextBridge.exposeInMainWorld('lefty', {
   doctorCheck: (request) => ipcRenderer.invoke('doctor:check', request),
   doctorGoto: (where) => ipcRenderer.invoke('doctor:goto', where),
   doctorFix: (fix) => ipcRenderer.invoke('doctor:fix', fix),
+  // Do it mode: Lefty clicks, types, presses keys and scrolls for the user (rects in DIPs, as everywhere else)
+  autoClick: (request) => ipcRenderer.invoke('auto:click', request),
+  autoType: (text) => ipcRenderer.invoke('auto:type', { text }),
+  autoKeys: (keys) => ipcRenderer.invoke('auto:keys', { keys }),
+  autoScroll: (request) => ipcRenderer.invoke('auto:scroll', request),
+  autoPeek: (rect) => ipcRenderer.invoke('auto:peek', { rect }),
+  autoCode: (code) => ipcRenderer.invoke('auto:code', { code }),
+  onInput: (callback) => ipcRenderer.on('lefty:input', (_event, data) => callback(data)),
+  // "What does this do?": F1 over a control (onExplain gets the mouse point), or a pick from the bubble
+  onExplain: (callback) => ipcRenderer.on('lefty:explain', (_event, point) => callback(point)),
+  explain: (request) => ipcRenderer.invoke('lefty:explain', request),
+  setPicking: (on) => ipcRenderer.send('overlay:pick', Boolean(on)),
+  // Voice: Ctrl+Space held down (on) and let go (off)
+  onVoiceHold: (callback) => ipcRenderer.on('voice:hold', (_event, data) => callback(data)),
+  runningApps: () => ipcRenderer.invoke('apps:running'),
+  // Focus mode: { minutes, allow } -> closes what isn't work until the time is up
+  startFocus: (request) => ipcRenderer.invoke('focus:start', request),
+  stopFocus: () => ipcRenderer.invoke('focus:stop'),
+  getFocus: () => ipcRenderer.invoke('focus:get'),
+  onFocus: (callback) => ipcRenderer.on('focus:changed', (_event, state) => callback(state)),
+  onFocusNotice: (callback) => ipcRenderer.on('focus:notice', (_event, notice) => callback(notice)),
+  homeAsk: (request) => ipcRenderer.invoke('home:ask', request),
+  onAsk: (callback) => ipcRenderer.on('lefty:ask', (_event, request) => callback(request)),
+  chats: () => ipcRenderer.invoke('history:list'),
+  chatGet: (id) => ipcRenderer.invoke('history:get', id),
+  chatCreate: (title) => ipcRenderer.invoke('history:create', title),
+  chatAdd: (entry) => ipcRenderer.invoke('history:add', entry),
+  chatProject: (entry) => ipcRenderer.invoke('history:project', entry),
+  chatRemove: (id) => ipcRenderer.invoke('history:remove', id),
+  storageUsage: () => ipcRenderer.invoke('history:usage'),
+  onChatsChanged: (callback) => ipcRenderer.on('history:changed', () => callback()),
+  onFocusBlock: (callback) => ipcRenderer.on('focus:block', (_event, block) => callback(block)),
+  onFocusBlockEnd: (callback) => ipcRenderer.on('focus:block-end', (_event, end) => callback(end)),
+  // Building a project in a folder
+  suggestFolder: (name) => ipcRenderer.invoke('build:suggest', name),
+  pickFolder: (current) => ipcRenderer.invoke('build:pick', current),
+  buildProject: (request) => ipcRenderer.invoke('build:run', request),
+  openProject: (request) => ipcRenderer.invoke('build:open', request),
+  // Settings (both windows): { mode: 'learn' | 'auto', size: 'small' | 'normal' | 'large', speak: 'off' | 'on', privateApps: [] }
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (changes) => ipcRenderer.invoke('settings:set', changes),
+  onSettings: (callback) => ipcRenderer.on('settings:changed', (_event, data) => callback(data)),
   raise: () => ipcRenderer.send('overlay:raise'),
+  focusSelf: () => ipcRenderer.send('overlay:focus'), // the keyboard to Lefty's bubble (an answer box)
   log: (message) => ipcRenderer.send('overlay:log', String(message)),
   requestHide: () => ipcRenderer.send('lefty:request-hide'),
-  setInteractive: (interactive) => ipcRenderer.send('overlay:set-interactive', interactive),
+  setRegions: (rects) => ipcRenderer.send('overlay:regions', rects), // where Lefty takes clicks (global DIP rects)
 });

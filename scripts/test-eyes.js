@@ -26,6 +26,19 @@ function check(condition, message) {
     const bad = await eyes.snapshot(1).then(() => null, (error) => error);
     check(bad && /no app window/.test(bad.message), 'a bad window gives a clear error, not a crash');
 
+    // "What does this do?" asks what is at a point: the Start button, in the taskbar, from explorer.
+    const start = shot.elements.find((e) => e.name === 'Start');
+    if (start) {
+      const at = { x: start.rect.x + start.rect.w / 2, y: start.rect.y + start.rect.h / 2 };
+      const plain = await eyes.peek(at);
+      check(plain.name === 'Start' && !('process' in plain), `a plain peek says only what is there: ${plain.type} "${plain.name}"`);
+      const clicked = await eyes.peek(at, { clickable: true });
+      check(clicked.name === 'Start' && clicked.type === 'Button' && /explorer/i.test(clicked.process) && clicked.lefty === false,
+        `a "clickable" peek names the control and its app: ${clicked.type} "${clicked.name}" in ${clicked.process}`);
+      check(clicked.rect && clicked.rect.w > 0 && clicked.windowRect && clicked.windowRect.w > 0 && clicked.password === false,
+        'and says where the control and its window are');
+    }
+
     // Reads whatever app is in front, so it is opt-in (never poke a game or a private window by surprise).
     if (process.env.LEFTY_TEST_FOREGROUND) {
       const current = await eyes.snapshot();

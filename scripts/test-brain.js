@@ -41,6 +41,7 @@ const jpeg = Buffer.from('fake image');
     calls.push(call);
     const next = (plan[model] || []).shift();
     if (!next) return busy();
+    if (next.timeout) throw Object.assign(new Error('aborted'), { name: 'AbortError' }); // as if its time ran out
     if (next.delay) {
       await new Promise((resolve, reject) => {
         const timer = setTimeout(resolve, next.delay);
@@ -62,13 +63,34 @@ const jpeg = Buffer.from('fake image');
   check(/0 MenuItem "File" \(10,40 40x30\)/.test(text), 'elements are listed in screenshot coordinates (second screen offset removed)');
   check(/1 Button "Bold" disabled/.test(text), 'disabled elements are marked');
   check(step.target && step.target.name === 'Bold' && step.target.rect.x === 1736, 'element_id becomes that element, in global coordinates');
-  check(step.instruction === 'Make it bold 🅱️' && step.status === 'step', 'the instruction comes through');
+  check(step.instruction === 'Make it bold' && step.status === 'step', 'the instruction comes through, without emoji');
   plan = { 'gemini-3.6-flash': [1, 2].map(() => ({ reply: geminiAnswer({ status: 'step', action: 'click', element_id: 7, instruction: 'Nope' }) })) };
   step = await ask({ goal: 'x' });
   check(step.target === null, 'an element id that does not exist points at nothing (never a wrong element)');
   plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'done', message: 'All bold now!' }) }] };
   step = await ask({ goal: 'x' });
   check(step.status === 'done' && step.message === 'All bold now!', 'done comes back with its message');
+  check(!/Mode: Do it/.test(calls[calls.length - 1].body.contents[0].parts[1].text), 'Learn mode adds nothing to the prompt');
+  // "Done" while pointing at something nobody clicked: asked once more, and the step wins.
+  let before = calls.length;
+  plan = { 'gemini-3.6-flash': [
+    { reply: geminiAnswer({ status: 'done', action: 'click', element_id: 0, instruction: 'Switched 🔢', message: 'Done!' }) },
+    { reply: geminiAnswer({ status: 'step', action: 'click', element_id: 0, instruction: 'Open File 📂' }) }] };
+  step = await ask({ goal: 'open the file menu', history: ['Open menu (done: Lefty clicked "Open Navigation")'] });
+  check(calls.length - before === 2 && /said done but also pointed at "File"/.test(calls[calls.length - 1].body.contents[0].parts[1].text) && step.status === 'step' && step.target.name === 'File',
+    'a "done" that points at an unclicked File is asked again, and the real step comes back');
+  before = calls.length;
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'done', action: 'click', element_id: 0, instruction: 'Open 📂', message: 'Open!' }) }] };
+  step = await ask({ goal: 'open the file menu', history: ['Open File (done: Lefty clicked "File")'] });
+  check(calls.length - before === 1 && step.status === 'done', 'a "done" pointing at what was just clicked is believed (no second call)');
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'done', message: 'ok' }) }] };
+  await ask({ goal: 'search for python', auto: true });
+  check(/Mode: Do it\. Lefty clicks and types for the user/.test(calls[calls.length - 1].body.contents[0].parts[1].text), 'Do it mode tells the AI to say exactly what to type');
+  // A box worked out from its neighbours (VS Code's hidden search box) keeps that flag, so Do it mode doesn't expect its name.
+  const hidden = [...elements, { name: 'Search Extensions', type: 'Edit', enabled: true, rect: { x: 1600, y: 200, w: 200, h: 24 }, guessed: true }];
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'type', element_id: 2, text: 'python', instruction: 'Search python 🔎' }) }] };
+  step = await ask({ goal: 'find python', elements: hidden });
+  check(step.target && step.target.name === 'Search Extensions' && step.target.guessed === true, 'a worked-out box keeps its "guessed" flag');
   calls = [];
 
   // Quality first: the best model is asked alone, and when it answers in time nobody else is asked.
@@ -77,7 +99,7 @@ const jpeg = Buffer.from('fake image');
   step = await ask();
   await sleep(120);
   check(calls.map((c) => c.model).join(',') === 'gemini-3.6-flash', `the best model is asked first, alone (asked ${calls.map((c) => c.model).join(', ')})`);
-  check(step.instruction === 'Open File 📂' && step.target && step.target.name === 'File', 'its answer is used');
+  check(step.instruction === 'Open File' && step.target && step.target.name === 'File', 'its answer is used');
   const call = calls[0];
 
   // The best model is slow today: the backup is asked too, the first good answer wins, the slow one is cancelled.
@@ -131,7 +153,24 @@ const jpeg = Buffer.from('fake image');
   plan = {};
   let error = null;
   try { await ask(); } catch (e) { error = e; }
-  check(error && error.status === 503 && calls.length <= 4, `when every model is busy, Lefty gives up after ${calls.length} tries with a "busy" error`);
+  check(error && error.status === 503 && calls.length <= 8, `when every model is busy, Lefty tries once more after a pause, then gives up after ${calls.length} tries with a "busy" error`);
+
+  // A model too slow to answer: the next ones are asked instead of giving up.
+  calls = [];
+  plan = {
+    'gemini-3.6-flash': [{ timeout: true }],
+    'gemini-3.7-flash': [{ timeout: true }],
+    'gemini-3.8-flash': [{ reply: geminiAnswer({ status: 'step', action: 'click', element_id: 1, instruction: 'Click File' }) }],
+  };
+  step = await ask();
+  check(step.instruction === 'Click File' && calls.length === 3, 'when models are too slow (timed out), the next one answers');
+
+  // All of them slow: the error says so (main turns it into "busy, try again"), not a network problem.
+  calls = [];
+  plan = Object.fromEntries(['gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-3.5-flash-lite'].map((m) => [m, [{ timeout: true }, { timeout: true }]]));
+  error = null;
+  try { await ask(); } catch (e) { error = e; }
+  check(error && error.timeout === true, 'when every model is too slow, the error is marked as a timeout');
 
   // Google says "slow down" on every model: Lefty waits as long as it asks, then tries again.
   calls = [];
@@ -156,10 +195,10 @@ const jpeg = Buffer.from('fake image');
   // Models sometimes wrap the JSON or leak their reasoning into a field: Lefty keeps only what belongs on the tag.
   plan = { 'gemini-3.7-flash': [{ reply: reply(200, { candidates: [{ content: { parts: [{ text: '```json\n{"status":"step","action":"key","text":"Ctrl+Plus Anders... wait, standard shortcut is","instruction":""}\n```' }] } }] }) }] };
   step = await ask();
-  check(step.text === 'Ctrl+Plus' && step.instruction === 'Press Ctrl+Plus ⌨️', `a fenced answer is read and leaked reasoning is cut (got "${step.text}" / "${step.instruction}")`);
+  check(step.text === 'Ctrl+Plus' && step.instruction === 'Press Ctrl+Plus', `a fenced answer is read and leaked reasoning is cut (got "${step.text}" / "${step.instruction}")`);
   plan = { 'gemini-3.7-flash': [{ reply: geminiAnswer({ status: 'step', action: 'key', text: 'Ctrl+PlusFunctionality: zooms in text', instruction: 'Press Ctrl+Plus ➕\nContext: user wants...' }) }] };
   step = await ask();
-  check(step.text === 'Ctrl+Plus' && step.instruction === 'Press Ctrl+Plus ➕', `a combo glued to reasoning falls back to the instruction (got "${step.text}" / "${step.instruction}")`);
+  check(step.text === 'Ctrl+Plus' && step.instruction === 'Press Ctrl+Plus', `a combo glued to reasoning falls back to the instruction (got "${step.text}" / "${step.instruction}")`);
 
   // The screenshot is sent smaller than the screen: the element list uses the screenshot's pixels.
   calls = [];
@@ -250,7 +289,7 @@ const jpeg = Buffer.from('fake image');
     { reply: geminiAnswer({ status: 'step', action: 'click', element_id: 0, instruction: 'Show the toolbar 🛠️' }) },
   ] };
   step = await ask({ goal: 'chose red colr' });
-  check(calls.length === 2 && /nothing in the clickable list matches it/.test(calls[1].body.contents[0].parts[1].text) && step.target.name === 'File' && step.instruction === 'Show the toolbar 🛠️',
+  check(calls.length === 2 && /nothing in the clickable list matches it/.test(calls[1].body.contents[0].parts[1].text) && step.target.name === 'File' && step.instruction === 'Show the toolbar',
     'a guessed spot for something not on the list is asked again as "probably hidden"');
 
   // A model out of quota rests for a while instead of being asked (and waited on) every time.
@@ -262,6 +301,106 @@ const jpeg = Buffer.from('fake image');
   plan = { 'gemini-3.7-flash': [{ reply: geminiAnswer({ status: 'done', message: 'ok' }) }] };
   await ask();
   check(calls[0].model === 'gemini-3.7-flash', 'a model that ran out of quota is skipped next time');
+
+  // A private app: no screenshot goes out, the AI is told to use the list, and a point (a place in a picture it never
+  // got) means nothing.
+  brain.useFetch(fakeFetch);
+  calls = [];
+  plan = { 'gemini-3.6-flash': [
+    { reply: geminiAnswer({ status: 'step', action: 'click', point: { x: 500, y: 500 }, instruction: 'Click OK' }) },
+    { reply: geminiAnswer({ status: 'step', action: 'click', element_id: 0, instruction: 'Open File 📂' }) },
+  ] };
+  step = await ask({ jpeg: null, app: 'KeePass' });
+  check(calls.every((c) => c.body.contents[0].parts.every((p) => !p.inlineData)), 'a private app: no picture in any request');
+  check(/Screenshot: none \(a private app: use the clickable list only\)/.test(calls[0].body.contents[0].parts[0].text) && /no screenshot/.test(calls[0].body.systemInstruction.parts[0].text),
+    'the AI is told there is no screenshot and to use the list');
+  check(calls.length === 2 && /gave no element_id or point/.test(calls[1].body.contents[0].parts[0].text) && step.target && step.target.name === 'File',
+    'a point without a picture is ignored and asked again; the list answer is used');
+  check(/0 MenuItem "File" \(10,40 40x30\)/.test(calls[0].body.contents[0].parts[0].text), 'the list is in screen units when there is no screenshot to scale to');
+
+  // A spoken goal: the recording goes with the screenshot in the same request, and the answer says what was heard.
+  calls = [];
+  const audio = { mime: 'audio/wav', data: Buffer.from('RIFF fake wav').toString('base64') };
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'click', element_id: 0, instruction: 'फ़ाइल खोलें 📂', heard: 'फ़ाइल मेनू खोलो', lang: 'hi' }) }] };
+  step = await ask({ goal: '', audio });
+  let voiceParts = calls[0].body.contents[0].parts;
+  check(voiceParts[0].inlineData.mimeType === 'image/jpeg' && voiceParts[1].inlineData.mimeType === 'audio/wav' && voiceParts[1].inlineData.data === audio.data,
+    'a spoken goal: the screenshot and the recording go in one request');
+  check(/Goal: spoken in the voice recording/.test(voiceParts[2].text), 'the prompt says the goal is in the recording');
+  check(step.heard === 'फ़ाइल मेनू खोलो' && step.lang === 'hi' && step.instruction === 'फ़ाइल खोलें' && step.target.name === 'File', 'the answer says what was heard, in which language, and the step in that language');
+  check(/language of the goal/.test(calls[0].body.systemInstruction.parts[0].text) && calls[0].body.generationConfig.responseSchema.properties.heard, 'the AI is asked to answer in the user\'s language and to say what it heard');
+  calls = [];
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'done', message: 'ok', heard: 'made up', lang: 'english please' }) }] };
+  step = await ask({ goal: 'open the file' });
+  check(step.heard === '' && step.lang === '', 'a typed goal never has a "heard", and a language that is not a code is dropped');
+  check(calls[0].body.contents[0].parts.length === 2, 'a typed goal sends no audio');
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'done', message: 'ok' }) }] };
+  calls = [];
+  await ask({ goal: 'x', audio: { mime: 'text/html', data: 'PGI+' } });
+  check(calls[0].body.contents[0].parts.every((p) => !p.inlineData || p.inlineData.mimeType === 'image/jpeg'), 'something that is not audio is never sent as the recording');
+  calls = [];
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'click', element_id: 0, instruction: 'Open File', heard: 'open file' }) }] };
+  await ask({ goal: '', audio, jpeg: null });
+  voiceParts = calls[0].body.contents[0].parts;
+  check(voiceParts.length === 2 && voiceParts[0].inlineData.mimeType === 'audio/wav', 'spoken in a private app: the recording goes, the screenshot does not');
+
+  // "What does this do?"
+  calls = [];
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ explanation: '  Empties the  Recycle Bin for good.\nYou cannot get the files back. ', risky: true }) }] };
+  let said = await brain.explain({ app: 'File Explorer', title: 'Recycle Bin', element: { name: 'Empty Recycle Bin', type: 'Button' }, nearby: ['Restore all items', 'Properties'], jpeg, spot: { x: 170.4, y: 90.2, w: 120, h: 30 }, lang: 'en' });
+  const explainCall = calls[0];
+  const explainText = explainCall.body.contents[0].parts[1].text;
+  check(explainCall.body.contents[0].parts[0].inlineData.data === jpeg.toString('base64'), 'explain: the picture of the area goes with it');
+  check(/The control: Button "Empty Recycle Bin"/.test(explainText) && /Around it: "Restore all items", "Properties"/.test(explainText) && /at 170,90 \(120x30 pixels\)/.test(explainText) && /App: File Explorer/.test(explainText),
+    'explain: the control, what is around it and where it is in the picture');
+  check(said.text === 'Empties the Recycle Bin for good. You cannot get the files back.' && said.risky === true, 'explain: one tidy answer, flagged as risky');
+  check(/one or two short, plain sentences/.test(explainCall.body.systemInstruction.parts[0].text), 'explain: asked for one or two plain sentences');
+  calls = [];
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ explanation: 'Guarda el archivo.' }) }] };
+  said = await brain.explain({ app: 'KeePass', element: { name: 'Save', type: 'Button' }, jpeg: null, lang: 'es' });
+  check(calls[0].body.contents[0].parts.length === 1 && /No picture/.test(calls[0].body.contents[0].parts[0].text) && /lang: es/.test(calls[0].body.contents[0].parts[0].text) && said.risky === false,
+    'explain in a private app: no picture, and the answer in the user\'s language');
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ explanation: '   ' }) }] };
+  error = await brain.explain({ element: { name: 'Save', type: 'Button' } }).catch((e) => e);
+  check(error instanceof Error && /no explanation/.test(error.message), 'explain: an empty answer is an error, not a blank tip');
+
+  // Focus mode: the time and the work apps come back tidy, and nothing is pointed at.
+  calls = [];
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'focus', instruction: 'Focus mode 🎯', element_id: 1, minutes: 900, allow: ['Chrome', '  physics tab  ', '', ...Array.from({ length: 12 }, (_, i) => `app${i}`)] }) }] };
+  step = await ask({ goal: 'focus for 15 hours on chrome and my physics tab' });
+  check(step.action === 'focus' && step.minutes === 480 && step.allow.length === 10 && step.allow[1] === 'physics tab' && step.target === null,
+    'focus: at most 8 hours and 10 work apps, nothing to point at');
+  check(/action "focus" with minutes/.test(calls[0].body.systemInstruction.parts[0].text), 'focus: the AI is told how to start focus mode');
+
+  // Building a project: the whole request comes back as what to build.
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'build_project', instruction: 'Building it 🛠️', text: 'A portfolio website.\nDark theme, with a contact form.' }) }] };
+  step = await ask({ goal: 'build me a portfolio website, dark theme, with a contact form' });
+  check(step.action === 'build_project' && /Dark theme, with a contact form/.test(step.text) && step.target === null, 'build_project: the full description of what to build');
+
+  // The files of a project: whole files, every path inside the folder.
+  calls = [];
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ summary: 'A dark portfolio site.', run: 'Open index.html in your browser.\nThen enjoy.', files: [
+    { path: 'index.html', content: '<!doctype html>\r\n<title>Me</title>' },
+    { path: 'css\\style.css', content: 'body { background: #111; }' },
+    { path: '../outside.txt', content: 'nope' },
+    { path: 'C:/Windows/evil.txt', content: 'nope' },
+    { path: '.env', content: 'KEY=1' },
+    { path: '.git/config', content: 'nope' },
+    { path: 'con.txt', content: 'nope' },
+    { path: 'js/app.js', content: 42 },
+  ] }) }] };
+  const built = await brain.buildProject({ request: 'a portfolio site', files: [{ path: 'README.md', content: '# Old readme' }], lang: 'en' });
+  const buildText = calls[0].body.contents[0].parts[0].text;
+  check(built.files.map((f) => f.path).join('|') === 'index.html|css/style.css' && built.files[0].content === '<!doctype html>\n<title>Me</title>',
+    'build: only files inside the folder are kept (no .., drives, .env, .git or Windows names), with plain line breaks');
+  check(built.summary === 'A dark portfolio site.' && built.run === 'Open index.html in your browser.', 'build: a summary and one line on how to run it');
+  check(/Build: a portfolio site/.test(buildText) && /--- README\.md\n# Old readme/.test(buildText), 'build: the AI sees what to build and the files already there');
+  check(calls[0].body.generationConfig.maxOutputTokens === 65536 && calls[0].body.generationConfig.thinkingConfig.thinkingLevel === 'medium', 'build: room for many files, and more thinking than a step');
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ summary: 'x', files: [{ path: '/etc/passwd', content: 'x' }] }) }] };
+  error = await brain.buildProject({ request: 'x' }).catch((e) => e);
+  check(error instanceof Error && /no files/.test(error.message), 'build: an answer with no usable file is an error');
+  check(brain.safePath('src\\app.js') === 'src/app.js' && brain.safePath('./a.css') === 'a.css' && brain.safePath('a/../b') === '' && brain.safePath('~/x') === '' && brain.safePath('x/.env.local') === '',
+    'safePath: backslashes and ./ are fine; .., home folders and .env files are not');
 
   // LEFTY_MODEL pins one model.
   process.env.LEFTY_MODEL = 'gemini-3.6-flash';

@@ -225,7 +225,7 @@ async function aiChecks() {
   check(decide(job, word).thinking && requests.length === 5, 'ai: a pause after typing finishes the step');
   await tick();
   d = decide(job, word);
-  check(d.done && d.message === '🎉 Your table is in!', 'ai: done only when the AI sees the goal achieved');
+  check(d.done && d.message === 'Your table is in!', 'ai: done only when the AI sees the goal achieved');
 
   // The AI says the user must decide, or can't do it: Lefty stops and says why.
   const stopJob = newJob(aiSkill('pay the bill', () => Promise.resolve({ ok: true, status: 'need_user', message: 'Enter your card details yourself.' })));
@@ -297,7 +297,7 @@ async function aiChecks() {
   check(decide(failJob, word).giveUp === 'My API key was refused.', 'ai: a brain error is shown, not swallowed');
   const throwJob = newJob(aiSkill('x', () => Promise.reject(new Error('boom'))));
   decide(throwJob, word); await tick(); await tick();
-  check(/hiccup/.test(decide(throwJob, word).giveUp), 'ai: a crash in the brain call becomes a friendly message');
+  check(/ran into a problem/.test(decide(throwJob, word).giveUp), 'ai: a crash in the brain call becomes a friendly message');
 
   // A cap on calls per goal, so a confused loop can't run up a bill.
   let calls = 0;
@@ -310,6 +310,61 @@ async function aiChecks() {
     if (shown.id) noteEvent(loopJob, { type: 'click', hit: false, point: { x: 1, y: 1 }, elements: [], decisionId: shown.id });
   }
   check(calls === 200 && /round in circles/.test(decide(loopJob, word).giveUp), `ai: only a runaway loop is stopped, after 200 calls (made ${calls})`);
+
+  // Do it mode: Lefty does the steps himself, and the AI is told it was Lefty.
+  const autoRequests = [];
+  const autoAnswers = [
+    { ok: true, status: 'step', action: 'click', instruction: 'Open Insert ➕', target: el('Insert', 'TabItem', r(80, 40, 60, 30)) },
+    { ok: true, status: 'step', action: 'type', instruction: 'Search tables 🔎', text: 'table', target: el('Search', 'Edit', r(300, 10, 200, 24)) },
+    { ok: true, status: 'step', action: 'key', instruction: 'Press Enter', text: 'Enter', target: null },
+    { ok: true, status: 'step', action: 'scroll', instruction: 'Scroll down', target: el('Page body', 'Document', r(0, 160, 1500, 700)) },
+    { ok: true, status: 'done', message: 'Done.' },
+  ];
+  const autoJob = newJob(aiSkill('add a table', (q) => { autoRequests.push(q); return Promise.resolve(autoAnswers[autoRequests.length - 1]); }));
+  const withSearch = { ...word, elements: [...word.elements, el('Search', 'Edit', r(300, 10, 200, 24))] };
+  decide(autoJob, withSearch); await tick();
+  d = decide(autoJob, withSearch);
+  check(d.action === 'click' && d.text === '', 'auto: a step says its action, so Do it mode knows what to do');
+  noteEvent(autoJob, { type: 'click', hit: true, auto: true, point: centre(d.target.rect), element: d.target, elements: withSearch.elements, decisionId: d.id });
+  check(decide(autoJob, withSearch).thinking && /done: Lefty clicked "Insert"/.test(autoRequests[1].history[0]), 'auto: the AI hears that Lefty clicked it');
+  await tick();
+  d = decide(autoJob, withSearch);
+  check(d.kind === 'type' && d.action === 'type' && d.text === 'table', 'auto: a typing step carries the text to type');
+  noteEvent(autoJob, { type: 'acted', auto: true, decisionId: 'ai:0' });
+  check(decide(autoJob, withSearch).id === d.id, 'auto: an "acted" for an older step changes nothing');
+  noteEvent(autoJob, { type: 'acted', auto: true, decisionId: d.id });
+  check(decide(autoJob, withSearch).thinking && /Lefty typed "table"/.test(autoRequests[2].history[1]), 'auto: Lefty typing finishes a typing step at once, no pause needed');
+  await tick();
+  d = decide(autoJob, withSearch);
+  check(d.kind === 'tell' && d.action === 'key' && d.text === 'Enter', 'auto: a shortcut step carries its keys');
+  noteEvent(autoJob, { type: 'key', combo: 'Enter', auto: true, decisionId: d.id });
+  check(decide(autoJob, withSearch).thinking && /Lefty pressed Enter/.test(autoRequests[3].history[2]), 'auto: Lefty pressing the keys finishes the step');
+  await tick();
+  d = decide(autoJob, withSearch);
+  check(d.action === 'scroll' && d.target.name === 'Page body', 'auto: a scroll step points at what to scroll');
+  noteEvent(autoJob, { type: 'resumed' });
+  check(decide(autoJob, withSearch).thinking && /stopped Lefty/.test(autoRequests[4].note), 'auto: after a stop and Continue, the AI looks afresh and is told why');
+  await tick();
+  check(decide(autoJob, withSearch).done, 'auto: and the goal still finishes');
+
+  // A spoken goal: the recording goes along until the AI says what it heard; then the words are the goal.
+  const voiceRequests = [];
+  const voiceAnswers = [
+    { ok: true, status: 'step', action: 'click', instruction: 'इंसर्ट खोलें ➕', heard: 'एक टेबल जोड़ो', lang: 'hi', target: el('Insert', 'TabItem', r(80, 40, 60, 30)) },
+    { ok: true, status: 'done', message: 'हो गया!' },
+  ];
+  let heard = null;
+  const audio = { mime: 'audio/wav', data: 'UklGRg==' };
+  const voiceJob = newJob(aiSkill('', (q) => { voiceRequests.push(q); return Promise.resolve(voiceAnswers[voiceRequests.length - 1]); }, { audio, onHeard: (words) => { heard = words; } }));
+  decide(voiceJob, word); await tick();
+  check(voiceRequests[0].audio === audio && voiceRequests[0].goal === '', 'voice: the first question carries the recording');
+  check(heard === 'एक टेबल जोड़ो', 'voice: what the AI heard is handed to the overlay to show');
+  d = decide(voiceJob, word);
+  check(d.label === 'इंसर्ट खोलें ➕', 'voice: the step comes in the language it was asked in');
+  click(voiceJob, d, word);
+  decide(voiceJob, insertTab);
+  check(voiceRequests.length === 2 && !('audio' in voiceRequests[1]) && voiceRequests[1].goal === 'एक टेबल जोड़ो', 'voice: after that the words are the goal and the recording is not sent again');
+
 }
 
 aiChecks().then(() => {

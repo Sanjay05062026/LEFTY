@@ -69,6 +69,23 @@ const manage = el('Button', 'Manage', 9, 929, 46, 46);
 t = snapTarget(manage, { instruction: 'Open the gear ⚙️', action: 'click', elements: withBox.concat([manage]), screen });
 check(t === manage, 'a pick is never moved when no other name fits the step');
 
+// Notepad with several tabs (read live): "Close scratch tab" picked the scratch tab; the window's own Close button
+// (the title bar's) must never win just because its short name fits.
+const notepad = [
+  el('TabItem', 'notes.txt', 20, 10, 180, 32), el('TabItem', 'scratch. Modified.', 200, 10, 180, 32),
+  { ...el('Button', 'Minimize', 1650, 0, 90, 40), titleBar: true }, { ...el('Button', 'Close', 1830, 0, 90, 40), titleBar: true },
+  el('Document', 'Text editor', 0, 90, 1920, 900),
+];
+t = snapTarget(notepad[1], { instruction: 'Close scratch tab ❌', action: 'click', elements: notepad, screen });
+check(t === notepad[1], `"Close scratch tab" keeps the scratch tab the AI chose (got ${t.type} "${t.name}")`);
+const withReplaceBar = notepad.concat([el('Button', 'Close replace options', 560, 120, 30, 30)]);
+t = snapTarget(withReplaceBar[1], { instruction: 'Close tab ❌', action: 'click', elements: withReplaceBar, screen });
+check(t === withReplaceBar[1], `"Close tab" on a tab stays on the tab, not "Close replace options" (got ${t.type} "${t.name}")`);
+t = snapTarget(spot('Close the window', 1700, 300), { instruction: 'Close it ❌', action: 'click', elements: notepad, screen });
+check(t.type === 'Spot', 'a guess is never snapped onto the window\'s own Close button');
+t = snapTarget(notepad[0], { instruction: 'Click Minimize', action: 'click', elements: notepad, screen });
+check(t === notepad[0], 'nor is a pick moved onto Minimize');
+
 check(keyWords('Type python in the box ✏️', 'python').length === 0, 'what is to be typed is not what the step points at');
 check(snapTarget(null, { instruction: 'x', elements: paint, screen }) === null, 'no target stays no target');
 
