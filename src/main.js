@@ -21,7 +21,9 @@ const SHORTCUT = 'Control+Space';
 const SHORTCUT_LABEL = 'Ctrl+Space';
 const SUMMON_DELAY_MS = 350; // the minimize animation, plus a beat for the screen reader to see the new app in front
 const PRELOAD = path.join(__dirname, 'preload.js');
-const ICON = path.join(__dirname, '..', 'assets', 'lefty-icon.png');
+// Windows takes the size it wants out of an .ico: 16 px in the tray, 32 in the taskbar. Handed a single png
+// it squashes that one image into all of them, and handed nothing it shows Electron's own icon instead.
+const ICON = path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'lefty-tray.ico' : 'lefty-icon.png');
 
 let mainWindow = null;
 let overlayWindow = null;
@@ -71,6 +73,33 @@ app.on('second-instance', (_event, argv, _cwd, extra) => {
   if (mainWindow) openHome();
 });
 app.on('before-quit', () => { quitting = true; });
+
+/* ---------- Being uninstalled ----------
+   Windows will not let an installer or uninstaller close a program running as administrator, and Lefty runs
+   that way on purpose. Rather than leave the user to kill him by hand, he watches for the note the uninstaller
+   leaves in his own folder and closes himself. He also goes when his program file has been deleted, which is
+   what is left of him when the folder is simply thrown away. */
+const UNINSTALL_NOTE = path.join(app.getPath('userData'), 'uninstalling');
+const LEAVING_EVERY_MS = 2000;
+const EXE_EVERY = 10; // the program file is a slower thing to check, and a rarer way to go: every 20 seconds
+
+function watchForUninstall() {
+  // A note from an uninstall that was cancelled would otherwise close him the moment he started.
+  try { fs.unlinkSync(UNINSTALL_NOTE); } catch (error) { /* there was none, which is the normal case */ }
+  let ticks = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+    let leaving = fs.existsSync(UNINSTALL_NOTE);
+    if (!leaving && app.isPackaged && ticks % EXE_EVERY === 0) leaving = !fs.existsSync(process.execPath);
+    if (!leaving) return;
+    clearInterval(timer);
+    console.log('[lefty] being uninstalled: closing myself');
+    try { app.setLoginItemSettings({ openAtLogin: false }); } catch (error) { /* nothing to undo */ }
+    try { if (tray) tray.destroy(); } catch (error) { /* already gone */ }
+    app.exit(0);
+  }, LEAVING_EVERY_MS);
+  if (timer.unref) timer.unref();
+}
 
 /* ---------- Ctrl + Space ----------
    The normal path is Electron's globalShortcut. Windows sometimes reserves Ctrl+Space
@@ -1507,6 +1536,7 @@ app.whenReady().then(() => {
   createMainWindow();
   createOverlayWindow();
   if (!SELFTEST) createTray();
+  if (!SELFTEST) watchForUninstall();
   if (!SELFTEST) console.log(`[lefty] brain: ${thinker().ready() ? `connected (${thinker().label()})` : 'no API key yet (add GEMINI_API_KEY to .env)'}`);
   // Start the screen reader early so the first Ctrl+Space is fast and it already knows the user's app.
   eyes.start(process.pid).catch((error) => console.log('[lefty] screen reader failed to start:', error.message));
