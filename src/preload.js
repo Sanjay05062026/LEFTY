@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('lefty', {
   openApp: (name) => ipcRenderer.invoke('lefty:open-app', name),
   launchApp: (app) => ipcRenderer.invoke('lefty:launch-app', app),
   focusApp: () => ipcRenderer.send('lefty:focus-app'),
+  focusGoalApp: () => ipcRenderer.invoke('lefty:focus-goal-app'),
   ghostStart: () => ipcRenderer.send('ghost:start'),
   ghostStop: () => ipcRenderer.send('ghost:stop'),
   onCaret: (callback) => ipcRenderer.on('lefty:caret', (_event, data) => callback(data)),

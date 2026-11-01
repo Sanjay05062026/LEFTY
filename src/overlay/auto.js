@@ -13,18 +13,11 @@
 (function (root) {
   const Guard = root.LeftyGuard || require('./guard');
 
-  // Actions that are the user's call even when nothing is lost: money, messages, installs, accounts, permissions.
-  // (Things that throw work away - delete, don't save, reset - are the click guard's, guard.js, which knows that
-  // "Reset zoom" or "Remove filter" are harmless.)
-  const ASK_PHRASES = ['buy', 'buy now', 'purchase', 'pay', 'checkout', 'check out', 'place order', 'order now', 'send',
-    'submit', 'post', 'publish', 'share', 'install', 'update', 'upgrade', 'subscribe', 'unsubscribe', 'accept',
-    'agree', 'allow', 'grant', 'confirm', 'sign out', 'log out', 'logout', 'sign up', 'register', 'download', 'restart',
-    'shut down', 'shutdown', 'reboot', 'transfer', 'donate', 'call', 'move to trash', 'move to recycle bin',
-    'cancel subscription', 'cancel order', 'cancel membership', 'cancel plan', 'close account'];
-  // A name that starts with one of these is harmless however it continues ("Undo delete", "Cancel download")...
-  const SAFE_START = new Set(['undo', 'cancel', 'back', 'keep', 'restore', 'recover', 'close']);
-  // ...unless it's one of these.
-  const NEVER_SAFE = ['cancel subscription', 'cancel order', 'cancel membership', 'cancel plan', 'close account'];
+  // Lefty was asking before far too much - buying, sending, installing, signing in, even "Confirm" - and a task
+  // that stops every other step to ask is not doing the task. He gets on with all of it now. The one thing he
+  // still stops for is losing work that cannot be got back: Delete, Don't Save, Empty Recycle Bin, Discard,
+  // Format, and the rest of the click guard's list (guard.js), which already knows "Reset zoom" and
+  // "Remove filter" are harmless.
 
   // Boxes whose contents are the user's alone: Lefty never types into them.
   const PRIVATE = /pass(word|code|phrase)|\bpin\b|\bcvv|\bcvc|security code|card number|credit card|debit card|\botp\b|one.time (code|password)|verification code|\bssn\b|social security|bank account|routing number|\biban\b|api key|secret|\btoken\b/i;
@@ -35,13 +28,9 @@
   const normalize = (text) => ` ${String(text || '').toLowerCase().replace(/[’']/g, '').replace(/\bdo not\b/g, 'dont')
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
 
-  function askPhrase(text) {
-    const said = normalize(text);
-    if (!said.trim()) return null;
-    if (NEVER_SAFE.some((p) => said.includes(` ${p} `))) return NEVER_SAFE.find((p) => said.includes(` ${p} `));
-    if (SAFE_START.has(said.trim().split(' ')[0])) return null;
-    return ASK_PHRASES.find((p) => said.includes(` ${p} `)) || null;
-  }
+  // Kept so the tests and callers still have it: nothing is an "ask" phrase any more, only the click guard's
+  // destructive names stop Lefty now.
+  function askPhrase() { return null; }
 
   const isReal = (target) => Boolean(target) && target.type !== 'Spot' && target.type !== 'Area';
 
@@ -52,10 +41,7 @@
     const step = stepWords(label);
     const risk = (isReal(target) && Guard.riskOf(target)) || (step && Guard.riskOf({ name: step, type: 'Button', enabled: true }));
     if (risk) return risk.warning.replace(/^(Careful!|Heads up:)\s*/, '');
-    const name = isReal(target) ? String(target.name || '').trim() : '';
-    const phrase = askPhrase(name) || askPhrase(step);
-    if (!phrase) return null;
-    return `"${name || step || 'this'}" ${phrase === 'call' ? 'starts a call' : 'is your call'}`;
+    return null; // nothing else is worth stopping a task for
   }
 
   // The step's own words without the verb and emoji: "Click Buy now" -> "Buy now".
@@ -107,8 +93,13 @@
   const FILLER = new Set(['click', 'tap', 'press', 'select', 'choose', 'pick', 'open', 'go', 'use', 'hit', 'the', 'a', 'an',
     'on', 'in', 'at', 'to', 'of', 'for', 'and', 'or', 'it', 'this', 'that', 'here', 'there', 'now', 'button', 'icon']);
   const wordsOf = (text) => normalize(text).trim().split(' ').filter(Boolean);
-  function spotOk(label, under) {
+  function spotOk(label, under, blind = false) {
     if (!under) return true; // couldn't look: the helper still checks the point is the app's
+    // Some apps tell Windows nothing about themselves - the JetBrains IDEs, anything drawn in Java or a game
+    // engine. Everything in them reads as one big "Pane", so this check would refuse every click in them and
+    // Lefty would hand back every step. When the app is unreadable there is nothing to contradict the AI, so
+    // what it saw in the screenshot is the best there is: he clicks.
+    if (blind) return true;
     if (!PLAIN.has(under.type)) return true;
     const keys = wordsOf(stripEmoji(label)).filter((w) => w.length > 1 && !FILLER.has(w));
     if (!keys.length) return true; // "Click here"

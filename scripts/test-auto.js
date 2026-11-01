@@ -35,21 +35,30 @@ check(p.act === 'scroll' && p.notches < 0, 'scroll down: the wheel turns down');
 p = plan(step({ target: el('Results'), action: 'scroll', label: 'Scroll up ⬆️' }));
 check(p.act === 'scroll' && p.notches > 0, 'scroll up: the wheel turns up');
 
-// --- risky clicks are asked about first ---
+// --- only losing work is asked about; everything else Lefty just does ---
 const risky = [
   ['Delete', 'Button'], ["Don't Save", 'Button'], ['Empty Recycle Bin', 'MenuItem'], ['Uninstall', 'Button'],
-  ['Buy now', 'Button'], ['Place order', 'Button'], ['Send', 'Button'], ['Install', 'Button'], ['Submit', 'Button'],
-  ['Sign out', 'MenuItem'], ['Download', 'Button'], ['Accept all', 'Button'], ['Pay $12.00', 'Button'], ['Post', 'Button'],
-  ['Cancel subscription', 'Button'], ['Restart now', 'Button'], ['Share', 'Button'], ['Reset settings', 'Button'],
+  ['Delete permanently', 'Button'], ['Discard changes', 'Button'], ['Reset settings', 'Button'],
 ];
 for (const [name, type] of risky) {
   p = plan(step({ target: el(name, type), label: `Click ${name}` }));
   check(p.act === 'click' && Boolean(p.ask), `"${name}" is asked about first: ${p.ask}`);
 }
+// A task that stops to ask every other step is not doing the task. Lefty gets on with all of these.
+const justDoIt = [
+  ['Buy now', 'Button'], ['Place order', 'Button'], ['Send', 'Button'], ['Install', 'Button'], ['Submit', 'Button'],
+  ['Sign out', 'MenuItem'], ['Download', 'Button'], ['Accept all', 'Button'], ['Pay $12.00', 'Button'], ['Post', 'Button'],
+  ['Cancel subscription', 'Button'], ['Restart now', 'Button'], ['Share', 'Button'], ['Subscribe', 'Button'],
+  ['Confirm', 'Button'], ['Allow', 'Button'], ['Sign up', 'Button'],
+];
+for (const [name, type] of justDoIt) {
+  p = plan(step({ target: el(name, type), label: `Click ${name}` }));
+  check(p.act === 'click' && !p.ask, `"${name}" is just done, no question`);
+}
 p = plan(step({ target: { name: 'here', type: 'Spot', rect: r(5, 5, 36, 36) }, label: 'Click Buy now 🛒' }));
-check(Boolean(p.ask), 'a guessed spot whose step says "Buy now" is asked about too');
+check(!p.ask, 'a guessed spot whose step says "Buy now" is clicked too');
 p = plan(step({ target: el(''), label: 'Delete the file 🗑️' }));
-check(Boolean(p.ask), 'an unnamed button whose step says "Delete" is asked about');
+check(Boolean(p.ask), 'an unnamed button whose step says "Delete" is still asked about');
 const harmless = ['Undo delete', 'Cancel', 'Cancel download', 'Back', 'Keep', 'Reset zoom', 'Remove filter', 'Close', 'Save',
   'Open', 'Settings', 'Book1', 'Sort order', 'Bold', 'Insert', 'Scientific', 'Search Extensions', 'Clear search'];
 for (const name of harmless) {
@@ -89,7 +98,7 @@ check(p.act === 'keys' && Boolean(p.ask), 'Alt+F4 is asked about first');
 p = plan({ id: 'ai:5', kind: 'tell', label: 'Delete it for good', action: 'key', text: 'Shift+Delete' });
 check(Boolean(p.ask), 'Shift+Delete is asked about first');
 p = plan({ id: 'ai:5', kind: 'tell', label: 'Press Enter to send ✉️', action: 'key', text: 'Enter' });
-check(p.act === 'keys' && Boolean(p.ask), 'Enter that sends a message is asked about first');
+check(p.act === 'keys' && !p.ask, 'Enter that sends a message is just pressed: sending is not losing work');
 p = plan({ id: 'ai:5', kind: 'tell', label: 'Press Enter ⏎', action: 'key', text: 'Enter' });
 check(p.act === 'keys' && !p.ask, 'a plain Enter is just pressed');
 p = plan({ id: 'ai:5', kind: 'tell', label: 'Use the magic key', action: 'key', text: 'Hyper+Q' });
@@ -108,6 +117,15 @@ for (const bad of ['', 'Ctrl+', 'Ctrl+Shift', 'Hyper+Q', 'Ctrl+Space bar thing']
 
 // --- guessed spots: only clicked when what's under them fits the step ---
 const { spotOk } = require('../src/overlay/auto');
+
+// An app that tells Windows nothing about itself (a JetBrains IDE, anything drawn in Java) reads as one big
+// pane. Refusing to click there would hand back every single step, so the AI's own look at the screenshot wins.
+const blindSpot = { name: 'here', type: 'Spot', rect: r(400, 300, 36, 36) };
+const pane = { name: 'WelcomeScreen', type: 'Pane' };
+check(!spotOk('Click main.py tab', pane), 'with a readable screen, a spot on an unrelated pane is refused');
+check(spotOk('Click main.py tab', pane, true), "...but in an app Windows can't read, Lefty clicks it anyway");
+check(spotOk('Click main.py tab', { name: 'main.py', type: 'Pane' }), 'a pane that does carry the name is fine either way');
+
 check(!spotOk("Click Don't Save 🛑", { name: 'Text editor', type: 'Document' }), 'an imagined "Don\'t Save" over the text editor is not clicked');
 check(spotOk("Click Don't Save 🛑", { name: "Don't save", type: 'Button' }), 'a real button under the guess is fine');
 check(spotOk('Click the canvas', { name: 'Canvas', type: 'Pane' }), 'a canvas the step names is fine');

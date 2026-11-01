@@ -18,6 +18,9 @@
 //                                             way or the thing there isn't the one expected ("expect": its name)
 //   {"id":10,"cmd":"type","hwnd":1234,"text":"hello"} -> Do it mode: types into the focused box; refuses password boxes
 //   {"id":11,"cmd":"scroll","hwnd":1234,"x":500,"y":300,"notches":-3} -> Do it mode: turns the mouse wheel there
+//   {"id":16,"cmd":"press","x":500,"y":300,"expect":"Save"} -> presses what is at that point through UI Automation,
+//                                          without a mouse and without the app needing to be in front. Falls back
+//                                          to "click" when the control has no pattern Lefty can press.
 //   {"id":12,"cmd":"peek","x":500,"y":300} -> what's under that point: { name, type } (before clicking a guessed spot)
 //   {"id":13,"cmd":"peek","x":500,"y":300,"clickable":true}
 //                                          -> the control a person clicking there means (a menu item, not the text
@@ -228,6 +231,16 @@ static class UiaHelper
                     var reply = (cmd as string) == "click"
                         ? Click(target, Convert.ToInt32(x), Convert.ToInt32(y), button as string ?? "left", count == null ? 1 : Convert.ToInt32(count), expect as string)
                         : Scroll(target, Convert.ToInt32(x), Convert.ToInt32(y), notches == null ? -3 : Convert.ToInt32(notches));
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "press")
+                {
+                    object x, y, expect;
+                    request.TryGetValue("x", out x);
+                    request.TryGetValue("y", out y);
+                    request.TryGetValue("expect", out expect);
+                    var reply = Press(target, Convert.ToInt32(x), Convert.ToInt32(y), expect as string);
                     reply["id"] = id;
                     Write(reply);
                 }
@@ -731,6 +744,93 @@ static class UiaHelper
     }
 
     // The name of the thing under the point, or of the nearest of its parents named expect (null: none of them is).
+    /* ---------- Pressing without the mouse ----------
+       Moving the real pointer is the part people notice: the cursor jumps out of their hand mid-sentence, and
+       nothing else can be clicked while Lefty works. Windows UI Automation can press a control directly instead
+       - the same thing a screen reader does - with no pointer and no need for the window to be in front.
+       Invoke covers buttons, menu items and links; the others cover list items, checkboxes, radio buttons and
+       the arrows that open a submenu. Controls that have none of them (a canvas, a custom-drawn toolbar, almost
+       everything in a Java app) come back "no-pattern", and the overlay falls back to a real click.
+       The element is found by point, and walked up until something pressable is reached, because the point
+       usually lands on the text inside the button rather than the button. */
+    const int InvokePatternId = 10000;
+    const int SelectionItemPatternId = 10010;
+    const int TogglePatternId = 10015;
+    const int ExpandCollapsePatternId = 10005;
+    const int PressDepth = 5;
+
+    // Tries every way of pressing this one element. Returns the name of the pattern used, or null.
+    static string PressElement(IUIAutomationElement el)
+    {
+        if (el == null) return null;
+        try
+        {
+            var invoke = el.GetCurrentPattern(InvokePatternId) as IUIAutomationInvokePattern;
+            if (invoke != null) { invoke.Invoke(); return "invoke"; }
+        }
+        catch (COMException) { }
+        try
+        {
+            var select = el.GetCurrentPattern(SelectionItemPatternId) as IUIAutomationSelectionItemPattern;
+            if (select != null) { select.Select(); return "select"; }
+        }
+        catch (COMException) { }
+        try
+        {
+            var toggle = el.GetCurrentPattern(TogglePatternId) as IUIAutomationTogglePattern;
+            if (toggle != null) { toggle.Toggle(); return "toggle"; }
+        }
+        catch (COMException) { }
+        try
+        {
+            var expand = el.GetCurrentPattern(ExpandCollapsePatternId) as IUIAutomationExpandCollapsePattern;
+            if (expand != null) { expand.Expand(); return "expand"; }
+        }
+        catch (COMException) { }
+        return null;
+    }
+
+    static Dictionary<string, object> Press(IntPtr hwnd, int x, int y, string expect)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return Error(null, "no-window");
+        var pids = AppPids(hwnd);
+        // The point still has to belong to the app Lefty is working in: pressing into whatever happens to be
+        // under the pointer is exactly what he must never do.
+        string blocked = WhoseIsPoint(hwnd, pids, x, y);
+        if (blocked != null) return Error(null, blocked);
+
+        IUIAutomationElement el;
+        try { el = uia.ElementFromPoint(new tagPOINT { x = x, y = y }); }
+        catch (COMException) { return Error(null, "no-pattern"); }
+        if (el == null) return Error(null, "no-pattern");
+
+        IUIAutomationTreeWalker walker = uia.ControlViewWalker;
+        string found = null;
+        for (int depth = 0; depth < PressDepth && el != null; depth++)
+        {
+            string name;
+            try { name = (el.CurrentName ?? "").Trim(); } catch (COMException) { break; }
+            if (found == null) found = name;
+            // When the step named something, only press a control whose name agrees; the point may have landed
+            // on a neighbour after the window moved.
+            bool named = string.IsNullOrEmpty(expect) || SameName(name, expect);
+            if (named)
+            {
+                string how = PressElement(el);
+                if (how != null)
+                {
+                    var ok = new Dictionary<string, object> { { "ok", true }, { "how", how } };
+                    ok["name"] = name;
+                    return ok;
+                }
+            }
+            try { el = walker.GetParentElement(el); } catch (COMException) { break; }
+        }
+        var reply = Error(null, "no-pattern");
+        reply["found"] = found ?? "";
+        return reply;
+    }
+
     static string NameAtPoint(int x, int y, string expect, out bool matches)
     {
         matches = false;
