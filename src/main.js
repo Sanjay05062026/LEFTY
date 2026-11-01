@@ -961,6 +961,10 @@ function audioOf(audio) {
   return typeof audio.data === 'string' && audio.data && audio.data.length <= MAX_AUDIO_CHARS ? { mime: audio.mime, data: audio.data } : null;
 }
 
+// Which build is running. Shown in the sidebar so a stale install is obvious at a glance
+// (an old build's messages live on in saved chats, which is confusing without this).
+ipcMain.handle('lefty:version', () => app.getVersion());
+
 ipcMain.handle('lefty:brain-ready', () => !SELFTEST && thinker().ready());
 ipcMain.handle('lefty:think', async (_event, request) => {
   if (SELFTEST || !thinker().ready()) return { ok: false, error: friendlyBrainError({ message: 'no API key' }) };

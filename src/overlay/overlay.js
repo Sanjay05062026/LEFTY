@@ -695,8 +695,10 @@ function askFirst(thisJob, decision, plan) {
   tuckBubble(false);
 }
 
-// Esc, the Stop chip, or the user's own click or key while Lefty works: he stops and offers to go on.
-function stopAuto(why, message) {
+// Lefty stops and offers to go on. Only two things reach here: the Stop chip ('button'), and giving up after
+// he could not get back to the app. Using the PC while he works does not stop him, and neither does Esc, so
+// there is no "you took over" case any more: every caller says why in its own words.
+function stopAuto(why, message = 'Stopped.') {
   if (!job || job.paused) return;
   const thisJob = job;
   job.paused = true;
@@ -707,8 +709,7 @@ function stopAuto(why, message) {
   api.setTarget(null);
   updateModeChip();
   api.log(`do it: stopped (${why})`);
-  const said = message || (why === 'esc' || why === 'button' ? 'Stopped.' : 'You took over, so I stopped.');
-  addChoices(`${said} Carry on yourself, or let me continue.`, [
+  addChoices(`${message} Carry on yourself, or let me continue.`, [
     { label: 'Continue', primary: true, pick: () => resumeAuto(thisJob, 'auto') },
     { label: 'Guide me instead', pick: () => resumeAuto(thisJob, 'learn') },
   ]);

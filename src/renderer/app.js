@@ -505,6 +505,10 @@ $('logout').addEventListener('click', async () => {
 });
 
 /* ---------- Start ---------- */
+// The build, next to the wordmark. Saved chats keep what older builds said, so without this an
+// update that fixed something looks like it didn't.
+if (api.version) api.version().then((v) => { $('brand-version').textContent = v ? `v${v}` : ''; }).catch(() => {});
+
 const savedUser = store.get('lefty.user');
 if (!savedUser) showView('login');
 else signIn(savedUser);

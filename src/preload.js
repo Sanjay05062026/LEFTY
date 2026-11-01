@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('lefty', {
   // Main window
   setLoggedIn: (loggedIn) => ipcRenderer.invoke('auth:changed', loggedIn),
+  version: () => ipcRenderer.invoke('lefty:version'),
   summon: () => ipcRenderer.send('lefty:summon'),
   // Overlay window
   onShow: (callback) => ipcRenderer.on('lefty:show', (_event, data) => callback(data)),
