@@ -1,6 +1,6 @@
 // Checks that Lefty finds the app a goal is about: an open window, or a Start menu app. Run: npm run test:apps
 
-const { findWindow, findStartApp, canonical } = require('../src/apps');
+const { findWindow, findStartApp, canonical, baseName } = require('../src/apps');
 const { appName } = require('../src/eyes');
 
 let failed = 0;
@@ -38,6 +38,23 @@ check((findStartApp('calculator', startApps) || {}).AppID.startsWith('Microsoft.
 check((findStartApp('chrome', startApps) || {}).AppID === 'Chrome' && (findStartApp('edge', startApps) || {}).AppID === 'MSEdge', 'browsers are found by their short names');
 check(findStartApp('photoshop', startApps) === null, 'an app that is not installed is not found');
 check(canonical('VS code') === 'visual studio code' && canonical('Calc') === 'calculator', 'short names are understood');
+
+// The Start menu names an app with its version; no window title ever carries one. Dropping it is what lets
+// Lefty find the window of an app he just opened, instead of saying it never opened.
+check(baseName('PyCharm 2026.2.1') === 'pycharm' && baseName('Visual Studio Code') === 'visual studio code'
+  && baseName('IntelliJ IDEA Community Edition 2024.1') === 'intellij idea' && baseName('7-Zip 24.09 (x64)') === '7 zip',
+  'version, edition and bitness are dropped from a Start menu name');
+check(baseName('Office 365') === 'office' && baseName('2048') === '2048' && baseName('') === '',
+  'a name that is only a number keeps it (an app really can be called 2048)');
+const ideWindows = [
+  { hwnd: 7, title: 'Welcome to PyCharm', process: 'pycharm64' },
+  { hwnd: 8, title: 'Spotify Premium', process: 'Spotify' },
+];
+const ide = (name) => (findWindow(name, ideWindows, appName) || {}).hwnd;
+check(ide('PyCharm 2026.2.1') === 7 && ide('PyCharm') === 7 && ide('pycharm') === 7,
+  'an app opened from the Start menu is found by the window it opens, version number and all');
+check(ide('Photoshop 2024') === undefined && ide('Notepad') === undefined,
+  'dropping the version does not make unrelated apps match');
 
 console.log(failed ? `\n${failed} app checks failed.` : '\nAll app checks passed.');
 process.exitCode = failed ? 1 : 0;
