@@ -2,7 +2,8 @@
 // Esc must not stop him, and only the Stop chip (or giving up on getting back to the app) ends a job.
 // These broke twice before, each time silently, so they are checked in the overlay's own source: it is a page
 // script that needs a window, an app and a screen to run, and none of that is what went wrong.
-// Also checks that the running build's version reaches the sidebar, so an old install is never mistaken for a new one.
+// Also checks the two things that made an old build pass itself off as a new one: the version reaches the
+// sidebar, and a newly installed Lefty takes over from the copy already running instead of quitting.
 // Run: npm run test:overlay
 
 const fs = require('fs');
@@ -72,6 +73,20 @@ check(/app\.getVersion\(\)/.test(main), "it reports Electron's own version for t
 check(/version: \(\) => ipcRenderer\.invoke\('lefty:version'\)/.test(preload), 'the window can ask for it');
 check(/id="brand-version"/.test(html), 'the sidebar has a place for it');
 check(/api\.version\(\)/.test(appJs) && /brand-version/.test(appJs), 'the sidebar fills it in on startup');
+
+// --- a new build takes over from the one already running ---
+// Only the first copy may hold the keyboard shortcut, so a second one quits. An update arrives as a second
+// copy: when it quits, the user keeps using the old build and the update looks like it did nothing.
+const lock = main.slice(main.indexOf('requestSingleInstanceLock'), main.indexOf("app.on('before-quit'"));
+check(/requestSingleInstanceLock\(\{ version: app\.getVersion\(\) \}\)/.test(lock),
+  'a starting copy says which build it is');
+check(/extra\.version/.test(lock) && /theirs !== app\.getVersion\(\)/.test(lock),
+  'the running copy compares that against its own');
+check(/releaseSingleInstanceLock\(\)/.test(lock), 'it lets go of the lock before standing down');
+check(/spawn\(exe,/.test(lock) && /app\.quit\(\)/.test(lock), 'it starts the new build and quits');
+check(/exe !== process\.execPath/.test(lock), 'it never restarts itself (no loop)');
+check(/theirs && theirs !== app\.getVersion\(\)/.test(lock),
+  'the same build opening twice just shows the window, as before');
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall overlay checks passed');
 process.exit(failed ? 1 : 0);

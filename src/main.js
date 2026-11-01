@@ -48,10 +48,26 @@ let picking = false;            // "What's this?": the next click anywhere picks
 if (SELFTEST) app.setPath('userData', path.join(app.getPath('temp'), 'lefty-selftest'));
 history.init(app.getPath('userData'));
 
-// Two copies of Lefty would both react to Ctrl+Space and cancel each other out.
-const hasLock = SELFTEST || app.requestSingleInstanceLock();
+// Two copies of Lefty would both react to Ctrl+Space and cancel each other out, so only the first runs and
+// any later one quits. An update is a later one: without the version check below, a freshly installed Lefty
+// quit on startup and the old copy opened its window instead, so every new build looked like it had changed
+// nothing. A copy that says it is a different build gets the machine: this one steps aside and starts it.
+const hasLock = SELFTEST || app.requestSingleInstanceLock({ version: app.getVersion() });
 if (!hasLock) app.quit();
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv, _cwd, extra) => {
+  const theirs = extra && extra.version;
+  const exe = Array.isArray(argv) ? argv[0] : '';
+  if (theirs && theirs !== app.getVersion() && exe && exe !== process.execPath && /\.exe$/i.test(exe)) {
+    console.log(`handing over to ${theirs} (this is ${app.getVersion()})`);
+    app.releaseSingleInstanceLock(); // the new one needs it the moment it starts
+    try {
+      spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    } catch (error) {
+      console.log(`could not start the new build: ${error.message}`);
+    }
+    app.quit();
+    return;
+  }
   if (mainWindow) openHome();
 });
 app.on('before-quit', () => { quitting = true; });
