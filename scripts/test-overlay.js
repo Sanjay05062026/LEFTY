@@ -119,8 +119,17 @@ check(/save it as/.test(overlay), 'when it could not be saved, he says to save i
 // He runs as administrator, so Windows refuses to let the uninstaller close him: it stopped at "Lefty cannot
 // be closed. Please close it manually and click Retry to continue." He closes himself instead.
 const nsh = read('build/installer.nsh');
-check(/customUnInit/.test(nsh), 'the uninstaller runs something of ours before it checks whether Lefty is running');
-check(/customInit/.test(nsh), 'and so does the installer, for installing over a running copy');
+// The hook has to be one electron-builder actually calls, and one that runs INSTEAD of the check that shows
+// the dialog. customUnInit is called after un.checkAppRunning, so the dialog would already have appeared;
+// customInit is not a hook at all. These are the names app-builder-lib looks for (its nsis templates).
+const HOOKS = ['customCheckAppRunning', 'customInstall', 'customUnInstall', 'customUnInit', 'customRemoveFiles',
+  'customWelcomePage', 'customFinishPage', 'customUninstallPage', 'customUnWelcomePage', 'customInstallmode',
+  'customUnInstallCheck', 'customUnInstallCheckCurrentUser', 'customPageAfterChangeDir'];
+const defined = [...nsh.matchAll(/!macro\s+(\w+)/g)].map((m) => m[1]);
+check(defined.length > 0, 'the script defines a hook');
+check(defined.every((name) => HOOKS.includes(name)), `every macro is a real hook (found ${defined.join(', ')})`);
+check(defined.includes('customCheckAppRunning'), 'it replaces the running check, which is what shows the dialog');
+check(!defined.includes('customUnInit'), 'and not customUnInit, which runs too late to stop it');
 check(/\$APPDATA\\lefty\\uninstalling/.test(nsh), 'it leaves the note where Lefty is looking');
 check(/Sleep \d{4}/.test(nsh), 'and waits for him to act on it');
 check(/taskkill/.test(nsh), 'a Lefty not running as administrator is closed the ordinary way too');
