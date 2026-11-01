@@ -12,6 +12,22 @@
 //   {"id":8,"cmd":"keys","hwnd":1234,"keys":["ctrl+g","text:12:1","enter","wait:100"]}
 //                                          -> presses keys in that window (only when the user asked Lefty to act:
 //                                             reading or fixing their code); refuses if it isn't in front
+//   {"id":9,"cmd":"click","hwnd":1234,"x":500,"y":300,"button":"left","count":1,"expect":"Save"}
+//                                          -> Do it mode: clicks that point in that app (or one of its menus and
+//                                             dialogs), then puts the mouse back; refuses if another window is in the
+//                                             way or the thing there isn't the one expected ("expect": its name)
+//   {"id":10,"cmd":"type","hwnd":1234,"text":"hello"} -> Do it mode: types into the focused box; refuses password boxes
+//   {"id":11,"cmd":"scroll","hwnd":1234,"x":500,"y":300,"notches":-3} -> Do it mode: turns the mouse wheel there
+//   {"id":12,"cmd":"peek","x":500,"y":300} -> what's under that point: { name, type } (before clicking a guessed spot)
+//   {"id":13,"cmd":"peek","x":500,"y":300,"clickable":true}
+//                                          -> the control a person clicking there means (a menu item, not the text
+//                                             inside it) plus the window there: { name, type, rect, process, title,
+//                                             windowRect } ("What does this do?")
+//   {"id":14,"cmd":"front"}                -> the window in front: { hwnd, root, title, process, lefty, shell }
+//                                             (focus mode checks it every second or two)
+//   {"id":15,"cmd":"close","hwnd":1234,"how":"close"|"minimize"}
+//                                          -> focus mode: asks that window to close (as its X button does, so an app
+//                                             can still ask to save) or minimizes it
 //
 // Unasked, it also writes {"event":"screenmode","fullscreen":true|false,...} whenever a fullscreen app
 // (a game, a video) comes to the front or leaves it, so Lefty can let go of Ctrl+Space while it is there.
@@ -93,9 +109,6 @@ static class UiaHelper
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint attach, uint attachTo, bool doAttach);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] static extern bool PeekMessage(out MSG message, IntPtr hwnd, uint min, uint max, uint remove);
-    [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-    const byte VK_MENU = 0x12;
-    const uint KEYEVENTF_KEYUP = 2;
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
@@ -174,6 +187,20 @@ static class UiaHelper
                     var reply = new Dictionary<string, object> { { "ok", true }, { "windows", OpenWindows() }, { "id", id } };
                     Write(reply);
                 }
+                else if ((cmd as string) == "front")
+                {
+                    var reply = Front();
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "close")
+                {
+                    object how;
+                    request.TryGetValue("how", out how);
+                    var reply = CloseWindow(target, (how as string) == "minimize");
+                    reply["id"] = id;
+                    Write(reply);
+                }
                 else if ((cmd as string) == "caret")
                 {
                     var reply = Caret(target);
@@ -182,9 +209,43 @@ static class UiaHelper
                 }
                 else if ((cmd as string) == "keys")
                 {
-                    object keys;
+                    object keys, anyAppWindow;
                     request.TryGetValue("keys", out keys);
-                    var reply = PressKeys(target, keys as System.Collections.ArrayList);
+                    request.TryGetValue("anyAppWindow", out anyAppWindow);
+                    var reply = PressKeys(target, keys as System.Collections.ArrayList, anyAppWindow is bool && (bool)anyAppWindow);
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "click" || (cmd as string) == "scroll")
+                {
+                    object x, y, button, count, expect, notches;
+                    request.TryGetValue("x", out x);
+                    request.TryGetValue("y", out y);
+                    request.TryGetValue("button", out button);
+                    request.TryGetValue("count", out count);
+                    request.TryGetValue("expect", out expect);
+                    request.TryGetValue("notches", out notches);
+                    var reply = (cmd as string) == "click"
+                        ? Click(target, Convert.ToInt32(x), Convert.ToInt32(y), button as string ?? "left", count == null ? 1 : Convert.ToInt32(count), expect as string)
+                        : Scroll(target, Convert.ToInt32(x), Convert.ToInt32(y), notches == null ? -3 : Convert.ToInt32(notches));
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "peek")
+                {
+                    object x, y, clickable;
+                    request.TryGetValue("x", out x);
+                    request.TryGetValue("y", out y);
+                    request.TryGetValue("clickable", out clickable);
+                    var reply = Peek(Convert.ToInt32(x), Convert.ToInt32(y), clickable is bool && (bool)clickable);
+                    reply["id"] = id;
+                    Write(reply);
+                }
+                else if ((cmd as string) == "type")
+                {
+                    object text;
+                    request.TryGetValue("text", out text);
+                    var reply = TypeText(target, text as string ?? "");
                     reply["id"] = id;
                     Write(reply);
                 }
@@ -327,10 +388,7 @@ static class UiaHelper
             if (title.Length == 0) return true;
             string cls = ClassOf(hwnd);
             if (cls == "Progman" || cls == "WorkerW") return true;
-            uint pid;
-            GetWindowThreadProcessId(hwnd, out pid);
-            string process = "";
-            try { process = Process.GetProcessById((int)pid).ProcessName; } catch { }
+            string process = ProcessNameOf(hwnd);
             list.Add(new Dictionary<string, object> { { "hwnd", hwnd.ToInt64() }, { "title", Clip(title.ToString(), 200) }, { "process", process }, { "minimized", IsIconic(hwnd) } });
             return list.Count < 40;
         }, IntPtr.Zero);
@@ -359,13 +417,13 @@ static class UiaHelper
         string method = "attach";
         if (GetForegroundWindow() != hwnd)
         {
-            // Fallback: Windows lets the process that sent the last input change the foreground window.
-            // A bare Alt tap is that input; it goes to Lefty's own overlay, where it does nothing.
-            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
-            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            // Fallback: Windows lets the process that sent the last input change the foreground window. A mouse move
+            // of zero pixels is that input, and no app reacts to it. (A bare Alt tap, used before, could reach the app
+            // just after it came forward: Notepad then showed its menu shortcuts and swallowed the next typed letters.)
+            SendInput(1, new[] { new INPUT { type = 0, u = new INPUTUNION { mi = new MOUSEINPUT { dwFlags = 0x1 } } } }, Marshal.SizeOf(typeof(INPUT)));
             SetForegroundWindow(hwnd);
             Thread.Sleep(50);
-            method = "alt";
+            method = "nudge";
         }
         return new Dictionary<string, object> { { "ok", true }, { "focused", GetForegroundWindow() == hwnd }, { "attached", attached }, { "method", method } };
     }
@@ -509,10 +567,14 @@ static class UiaHelper
     {
         { "enter", 0x0D }, { "escape", 0x1B }, { "esc", 0x1B }, { "tab", 0x09 }, { "backspace", 0x08 }, { "delete", 0x2E },
         { "home", 0x24 }, { "end", 0x23 }, { "up", 0x26 }, { "down", 0x28 }, { "left", 0x25 }, { "right", 0x27 },
-        { "pageup", 0x21 }, { "pagedown", 0x22 }, { "f8", 0x77 }, { "space", 0x20 },
-        { "ctrl", 0x11 }, { "shift", 0x10 }, { "alt", 0x12 },
+        { "pageup", 0x21 }, { "pagedown", 0x22 }, { "space", 0x20 }, { "insert", 0x2D }, { "del", 0x2E },
+        { "ctrl", 0x11 }, { "control", 0x11 }, { "shift", 0x10 }, { "alt", 0x12 }, { "win", 0x5B }, { "windows", 0x5B },
+        { "f1", 0x70 }, { "f2", 0x71 }, { "f3", 0x72 }, { "f4", 0x73 }, { "f5", 0x74 }, { "f6", 0x75 },
+        { "f7", 0x76 }, { "f8", 0x77 }, { "f9", 0x78 }, { "f10", 0x79 }, { "f11", 0x7A }, { "f12", 0x7B },
+        { "plus", 0xBB }, { "=", 0xBB }, { "minus", 0xBD }, { "-", 0xBD }, { ",", 0xBC }, { ".", 0xBE }, { "/", 0xBF },
+        { ";", 0xBA }, { "[", 0xDB }, { "]", 0xDD }, { "\\", 0xDC }, { "'", 0xDE }, { "`", 0xC0 },
     };
-    static readonly HashSet<ushort> extendedKeys = new HashSet<ushort> { 0x2E, 0x24, 0x23, 0x26, 0x28, 0x25, 0x27, 0x21, 0x22 };
+    static readonly HashSet<ushort> extendedKeys = new HashSet<ushort> { 0x2E, 0x24, 0x23, 0x26, 0x28, 0x25, 0x27, 0x21, 0x22, 0x2D, 0x5B };
 
     static INPUT Key(ushort vk, ushort scan, uint flags)
     {
@@ -526,12 +588,15 @@ static class UiaHelper
         Thread.Sleep(15);
     }
 
-    static Dictionary<string, object> PressKeys(IntPtr hwnd, System.Collections.IEnumerable keys)
+    // anyAppWindow (Do it mode): the keys may also go to one of the app's menus or dialogs in front, not only its window.
+    static Dictionary<string, object> PressKeys(IntPtr hwnd, System.Collections.IEnumerable keys, bool anyAppWindow)
     {
         if (keys == null) return Error(null, "no keys");
+        HashSet<uint> pids = anyAppWindow && hwnd != IntPtr.Zero ? AppPids(hwnd) : null;
         foreach (object item in keys)
         {
-            if (hwnd == IntPtr.Zero || GetForegroundWindow() != hwnd) return Error(null, "the app is not in front");
+            IntPtr front = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero || (front != hwnd && (pids == null || !pids.Contains(PidOf(front))))) return Error(null, "the app is not in front");
             string key = Convert.ToString(item);
             if (key.StartsWith("wait:")) { Thread.Sleep(Math.Min(2000, int.Parse(key.Substring(5)))); continue; }
             var inputs = new List<INPUT>();
@@ -558,6 +623,324 @@ static class UiaHelper
             for (int i = codes.Count - 1; i >= 0; i--) inputs.Add(Key(codes[i], 0, KEY_UP));
             Send(inputs);
         }
+        return new Dictionary<string, object> { { "ok", true } };
+    }
+
+    // Do it mode: Lefty clicks and types for the user, with the same real mouse and keyboard input a person makes (so
+    // every app reacts as it does to a person). Each action first checks that the point belongs to the app the goal is
+    // about (its window, or one of its menus and dialogs) and nothing else is in the way, and the mouse goes back to
+    // where the user left it straight after.
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT point);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT point);
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr lParam);
+    const uint GA_ROOT = 2;
+    const uint INPUT_MOUSE = 0;
+    const uint MOUSE_LEFTDOWN = 0x2, MOUSE_LEFTUP = 0x4, MOUSE_RIGHTDOWN = 0x8, MOUSE_RIGHTUP = 0x10, MOUSE_WHEEL = 0x800;
+    const int ExpectDepth = 6; // the thing under the point may be a part of the expected one (a menu item's text)
+
+    static uint PidOf(IntPtr hwnd)
+    {
+        uint pid;
+        GetWindowThreadProcessId(hwnd, out pid);
+        return pid;
+    }
+
+    // The name of the program a window belongs to. Store apps (Calculator, Settings...) sit in a frame window owned by
+    // ApplicationFrameHost, which hosts all of them; the app's own process draws inside it, and that is the name people
+    // mean (and the one the private apps list must hold, or marking Calculator private would cover every Store app).
+    static string ProcessNameOf(IntPtr hwnd)
+    {
+        uint pid = PidOf(hwnd);
+        string name = "";
+        try { name = Process.GetProcessById((int)pid).ProcessName; } catch { }
+        if (!string.Equals(name, "ApplicationFrameHost", StringComparison.OrdinalIgnoreCase)) return name;
+        uint inner = 0;
+        EnumChildWindows(hwnd, (child, _) => { uint p = PidOf(child); if (p != 0 && p != pid) { inner = p; return false; } return true; }, IntPtr.Zero);
+        if (inner == 0) return name; // minimized: the app is not inside its frame right now
+        try { return Process.GetProcessById((int)inner).ProcessName; } catch { return name; }
+    }
+
+    // Focus mode: the window in front. root is the window that owns it (an app's main window for its dialogs), so
+    // a save prompt counts as part of its app. shell: the taskbar, Start, the desktop and Windows' passing screens.
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    const uint GA_ROOTOWNER = 3;
+    const uint WM_CLOSE = 0x0010;
+    const int SW_MINIMIZE = 6;
+
+    static Dictionary<string, object> Front()
+    {
+        IntPtr hwnd = GetForegroundWindow();
+        var reply = new Dictionary<string, object> { { "ok", true }, { "hwnd", 0L } };
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) { reply["shell"] = true; return reply; }
+        IntPtr root = GetAncestor(hwnd, GA_ROOTOWNER);
+        if (root == IntPtr.Zero) root = hwnd;
+        var title = new StringBuilder(512);
+        GetWindowText(root, title, title.Capacity);
+        string cls = ClassOf(hwnd);
+        uint pid = PidOf(hwnd);
+        reply["hwnd"] = hwnd.ToInt64();
+        reply["root"] = root.ToInt64();
+        reply["title"] = Clip(title.ToString(), 200);
+        reply["process"] = ProcessNameOf(root);
+        reply["lefty"] = pid == (uint)leftyPid || pid == (uint)Process.GetCurrentProcess().Id;
+        reply["shell"] = cls == "Progman" || cls == "WorkerW" || shellClasses.Contains(cls) || shellClasses.Contains(ClassOf(root));
+        return reply;
+    }
+
+    static Dictionary<string, object> CloseWindow(IntPtr hwnd, bool minimize)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return Error(null, "no such window");
+        if (PidOf(hwnd) == (uint)leftyPid) return Error(null, "lefty");
+        if (minimize) ShowWindow(hwnd, SW_MINIMIZE);
+        else PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        return new Dictionary<string, object> { { "ok", true } };
+    }
+
+    // The processes that draw the app: its own, plus those of its child windows (a Store app like Calculator is drawn
+    // by its own process inside a frame window that belongs to ApplicationFrameHost).
+    static HashSet<uint> AppPids(IntPtr hwnd)
+    {
+        var pids = new HashSet<uint> { PidOf(hwnd) };
+        EnumChildWindows(hwnd, (child, _) => { pids.Add(PidOf(child)); return pids.Count < 8; }, IntPtr.Zero);
+        pids.Remove(0);
+        return pids;
+    }
+
+    // Null when the point is the app's, else why not: "lefty" (Lefty's own bubble is there), "covered" (another app).
+    static string WhoseIsPoint(IntPtr hwnd, HashSet<uint> pids, int x, int y)
+    {
+        IntPtr at = WindowFromPoint(new POINT { X = x, Y = y });
+        if (at == IntPtr.Zero) return "covered";
+        IntPtr root = GetAncestor(at, GA_ROOT);
+        uint pid = PidOf(root);
+        if (pid == (uint)leftyPid) return "lefty";
+        if (root == hwnd || IsOwnedBy(root, hwnd) || pids.Contains(pid) || pids.Contains(PidOf(at))) return null;
+        return "covered";
+    }
+
+    // The app (or its menu or dialog) must have the keyboard before Lefty acts: many apps ignore the first click on an
+    // inactive window. Gives it focus if needed; false if Windows won't.
+    static bool AppInFront(IntPtr hwnd, HashSet<uint> pids)
+    {
+        if (pids.Contains(PidOf(GetForegroundWindow()))) return true;
+        Focus(hwnd);
+        return pids.Contains(PidOf(GetForegroundWindow()));
+    }
+
+    // The name of the thing under the point, or of the nearest of its parents named expect (null: none of them is).
+    static string NameAtPoint(int x, int y, string expect, out bool matches)
+    {
+        matches = false;
+        IUIAutomationElement el;
+        try { el = uia.ElementFromPoint(new tagPOINT { x = x, y = y }); }
+        catch (COMException) { return null; }
+        string first = null;
+        IUIAutomationTreeWalker walker = uia.ControlViewWalker;
+        for (int depth = 0; depth < ExpectDepth && el != null; depth++)
+        {
+            string name;
+            try { name = (el.CurrentName ?? "").Trim(); } catch (COMException) { break; }
+            if (first == null) first = name;
+            if (expect != null && SameName(name, expect)) { matches = true; return name; }
+            try { el = walker.GetParentElement(el); } catch (COMException) { break; }
+        }
+        return first;
+    }
+
+    // Names in a snapshot are cut at 120 characters, so a long one only has to start the same.
+    static bool SameName(string name, string expect)
+    {
+        string want = expect.Trim();
+        return string.Equals(name, want, StringComparison.OrdinalIgnoreCase)
+            || (want.Length >= 100 && name.StartsWith(want, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Hit testing misses some popups (Notepad's Find bar answers with the text editor under it), so when the thing under
+    // the point isn't the expected one, the app's windows are searched for an element of that name covering the point.
+    static bool NamedElementCovers(IntPtr hwnd, int x, int y, string expect)
+    {
+        var cache = uia.CreateCacheRequest();
+        cache.AddProperty(NameProperty);
+        cache.AddProperty(BoundingRectangleProperty);
+        cache.AutomationElementMode = AutomationElementMode.AutomationElementMode_None;
+        var condition = uia.CreatePropertyConditionEx(NameProperty, expect.Trim(), PropertyConditionFlags.PropertyConditionFlags_IgnoreCase);
+        foreach (IntPtr window in AppWindows(hwnd))
+        {
+            IUIAutomationElementArray found;
+            try { found = uia.ElementFromHandle(window).FindAllBuildCache(TreeScope.TreeScope_Descendants, condition, cache); }
+            catch (COMException) { continue; }
+            for (int i = 0; found != null && i < found.Length; i++)
+            {
+                tagRECT r = found.GetElement(i).CachedBoundingRectangle;
+                if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+            }
+        }
+        return false;
+    }
+
+    // Kinds of things under a point that aren't controls: a text area, a canvas, a panel.
+    static readonly Dictionary<int, string> plainTypes = new Dictionary<int, string>
+    {
+        { 50033, "Pane" }, { 50032, "Window" }, { 50025, "Custom" }, { 50026, "Group" }, { 50020, "Text" }, { 50006, "Image" },
+    };
+
+    static Dictionary<string, object> Peek(int x, int y, bool clickable)
+    {
+        IUIAutomationElement el;
+        try { el = uia.ElementFromPoint(new tagPOINT { x = x, y = y }); }
+        catch (COMException) { return Error(null, "nothing there"); }
+        if (el == null) return Error(null, "nothing there");
+        if (clickable)
+        {
+            // What a person clicking here means: the nearest of the element and its parents that is a named control
+            // (the menu item, not the text drawn inside it).
+            IUIAutomationTreeWalker walker = uia.ControlViewWalker;
+            IUIAutomationElement up = el;
+            for (int depth = 0; depth < ExpectDepth && up != null; depth++)
+            {
+                string kind, label;
+                try { label = (up.CurrentName ?? "").Trim(); }
+                catch (COMException) { break; }
+                if (label.Length > 0 && interactiveTypes.TryGetValue(SafeControlType(up), out kind)) { el = up; break; }
+                try { up = walker.GetParentElement(up); } catch (COMException) { break; }
+            }
+        }
+        string type, name;
+        var reply = new Dictionary<string, object> { { "ok", true } };
+        try
+        {
+            int id = el.CurrentControlType;
+            if (!interactiveTypes.TryGetValue(id, out type) && !plainTypes.TryGetValue(id, out type)) type = "Other";
+            name = Clip((el.CurrentName ?? "").Trim(), 120);
+            if (clickable)
+            {
+                reply["rect"] = RectToDict(el.CurrentBoundingRectangle);
+                reply["password"] = el.CurrentIsPassword != 0;
+            }
+        }
+        catch (COMException) { return Error(null, "nothing there"); }
+        reply["name"] = name;
+        reply["type"] = type;
+        if (clickable)
+        {
+            // The window there: which app was clicked, and where its window is (for spots without a name).
+            IntPtr at = WindowFromPoint(new POINT { X = x, Y = y });
+            IntPtr root = at == IntPtr.Zero ? IntPtr.Zero : GetAncestor(at, GA_ROOT);
+            if (root != IntPtr.Zero)
+            {
+                string process = ProcessNameOf(root);
+                var title = new StringBuilder(512);
+                GetWindowText(root, title, title.Capacity);
+                RECT wr;
+                reply["process"] = process;
+                reply["title"] = Clip(title.ToString(), 200);
+                reply["lefty"] = PidOf(root) == (uint)leftyPid;
+                if (GetWindowRect(root, out wr)) reply["windowRect"] = new Dictionary<string, object> { { "x", wr.Left }, { "y", wr.Top }, { "w", wr.Right - wr.Left }, { "h", wr.Bottom - wr.Top } };
+            }
+        }
+        return reply;
+    }
+
+    static int SafeControlType(IUIAutomationElement el)
+    {
+        try { return el.CurrentControlType; } catch (COMException) { return 0; }
+    }
+
+    static INPUT Mouse(uint flags, int data)
+    {
+        return new INPUT { type = INPUT_MOUSE, u = new INPUTUNION { mi = new MOUSEINPUT { dwFlags = flags, mouseData = (uint)data } } };
+    }
+
+    static Dictionary<string, object> Click(IntPtr hwnd, int x, int y, string button, int count, string expect)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return Error(null, "no-window");
+        var pids = AppPids(hwnd);
+        string blocked = WhoseIsPoint(hwnd, pids, x, y);
+        if (blocked != null) return Error(null, blocked);
+        if (!AppInFront(hwnd, pids)) return Error(null, "not-front");
+        bool matches;
+        string found = NameAtPoint(x, y, string.IsNullOrEmpty(expect) ? null : expect, out matches);
+        if (!string.IsNullOrEmpty(expect) && !matches && NamedElementCovers(hwnd, x, y, expect)) { matches = true; found = expect; }
+        if (!string.IsNullOrEmpty(expect) && !matches)
+        {
+            var moved = Error(null, "moved");
+            moved["found"] = found ?? "";
+            return moved;
+        }
+        bool right = button == "right";
+        POINT before;
+        bool known = GetCursorPos(out before);
+        SetCursorPos(x, y);
+        Thread.Sleep(40); // the app sees the mouse arrive (hover) before the click, as with a person
+        var inputs = new List<INPUT>();
+        for (int i = 0; i < Math.Max(1, Math.Min(2, count)); i++)
+        {
+            inputs.Add(Mouse(right ? MOUSE_RIGHTDOWN : MOUSE_LEFTDOWN, 0));
+            inputs.Add(Mouse(right ? MOUSE_RIGHTUP : MOUSE_LEFTUP, 0));
+        }
+        SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+        Thread.Sleep(30);
+        if (known) SetCursorPos(before.X, before.Y);
+        var reply = new Dictionary<string, object> { { "ok", true } };
+        reply["found"] = found ?? "";
+        return reply;
+    }
+
+    static Dictionary<string, object> Scroll(IntPtr hwnd, int x, int y, int notches)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return Error(null, "no-window");
+        var pids = AppPids(hwnd);
+        string blocked = WhoseIsPoint(hwnd, pids, x, y);
+        if (blocked != null) return Error(null, blocked);
+        if (!AppInFront(hwnd, pids)) return Error(null, "not-front");
+        POINT before;
+        bool known = GetCursorPos(out before);
+        SetCursorPos(x, y);
+        Thread.Sleep(40);
+        int clamped = Math.Max(-10, Math.Min(10, notches));
+        SendInput(1, new[] { Mouse(MOUSE_WHEEL, clamped * 120) }, Marshal.SizeOf(typeof(INPUT)));
+        Thread.Sleep(30);
+        if (known) SetCursorPos(before.X, before.Y);
+        return new Dictionary<string, object> { { "ok", true } };
+    }
+
+    // Types into whatever has the keyboard in the app (Lefty clicked the box first). Never into a password box: those
+    // are the user's to fill.
+    static Dictionary<string, object> TypeText(IntPtr hwnd, string text)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return Error(null, "no-window");
+        var pids = AppPids(hwnd);
+        if (!pids.Contains(PidOf(GetForegroundWindow()))) return Error(null, "not-front");
+        try
+        {
+            IUIAutomationElement focused = uia.GetFocusedElement();
+            if (focused != null && focused.CurrentIsPassword != 0) return Error(null, "password");
+        }
+        catch (COMException) { }
+        // One character per SendInput, a moment apart: modern text boxes (Notepad's, WinUI's) read a batch of typed
+        // characters late and repeat the last one ("abc def" came out as "abc fff").
+        int size = Marshal.SizeOf(typeof(INPUT));
+        foreach (char c in text)
+        {
+            if (c == '\r') continue;
+            if (!pids.Contains(PidOf(GetForegroundWindow()))) return Error(null, "not-front"); // the user switched away
+            INPUT[] pair;
+            if (c == '\n' || c == '\t')
+            {
+                ushort vk = c == '\n' ? (ushort)0x0D : (ushort)0x09;
+                pair = new[] { Key(vk, 0, 0), Key(vk, 0, KEY_UP) };
+            }
+            else
+            {
+                pair = new[] { Key(0, c, KEY_UNICODE), Key(0, c, KEY_UNICODE | KEY_UP) };
+            }
+            SendInput(2, pair, size);
+            Thread.Sleep(c == ' ' ? 25 : 10); // a word just ended: spell checkers and suggestions look at it
+        }
+        Thread.Sleep(15);
         return new Dictionary<string, object> { { "ok", true } };
     }
 
@@ -590,10 +973,7 @@ static class UiaHelper
         var timer = Stopwatch.StartNew();
         if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return Error(null, "no app window found");
 
-        uint pid;
-        GetWindowThreadProcessId(hwnd, out pid);
-        string processName = "";
-        try { processName = Process.GetProcessById((int)pid).ProcessName; } catch { }
+        string processName = ProcessNameOf(hwnd);
         var title = new StringBuilder(512);
         GetWindowText(hwnd, title, title.Capacity);
 

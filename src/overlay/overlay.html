@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; media-src 'self' blob:">
   <title>Lefty overlay</title>
   <link rel="stylesheet" href="overlay.css">
 </head>
@@ -10,33 +10,50 @@
   <div id="ghost" class="ghost"></div>
   <div id="ring" class="ring"></div>
   <div id="steptag" class="steptag"></div>
+  <button id="modechip" class="modechip" type="button"></button>
   <div id="guard-ring" class="guard-ring"></div>
   <div id="guard-tag" class="guard-tag"></div>
+  <div id="tip-ring" class="tip-ring"></div>
+  <div id="tip" class="tip" role="status"></div>
+  <div id="picklayer" class="picklayer"></div>
+  <div id="pickhint" class="pickhint">Click any button to hear what it does · Esc to cancel</div>
 
   <div id="lefty" class="lefty">
-    <img src="../../assets/lefty.svg" alt="Lefty" draggable="false">
+    <div class="lefty-body"><img src="../../assets/lefty.svg" alt="Lefty" draggable="false"></div>
   </div>
 
   <div id="bubble" class="bubble">
     <div class="bubble-head">
       <span class="name">Lefty</span>
-      <span class="hint">Esc or Ctrl+Space to close</span>
+      <div class="head-tools">
+        <button id="speak" class="icon-btn" type="button" aria-pressed="false" title="Lefty talks: off"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg></button>
+        <div id="mode" class="mode" role="radiogroup" aria-label="How Lefty helps">
+          <button type="button" role="radio" data-mode="learn" aria-checked="true" title="Lefty points, you click">Learn</button>
+          <button type="button" role="radio" data-mode="auto" aria-checked="false" title="Lefty clicks and types for you">Do it</button>
+        </div>
+      </div>
     </div>
     <div id="messages" class="messages"></div>
     <form id="ask" class="ask">
       <input id="goal" placeholder="e.g. File > Save as" autocomplete="off" spellcheck="false">
-      <button type="submit" aria-label="Ask Lefty">➤</button>
+      <button id="mic" class="mic" type="button" aria-label="Talk to Lefty" title="Talk to Lefty (or hold Ctrl+Space)"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="22"/></svg></button>
+      <button type="submit" aria-label="Ask Lefty"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
     </form>
     <div class="chips">
       <button type="button" data-q="I'm stuck, what do I do next?">I'm stuck, what next?</button>
-      <button type="button" data-q="Create a JSON file">Create a JSON file</button>
+      <button type="button" id="whats-this">What's this?</button>
+      <button type="button" data-q="focus mode 30 minutes">Focus 30 min</button>
     </div>
+    <p class="hint">Esc closes · hold Ctrl+Space to talk · F1 explains a button</p>
   </div>
 
   <script src="match.js"></script>
   <script src="guard.js"></script>
+  <script src="auto.js"></script>
   <script src="dialogs.js"></script>
   <script src="skills.js"></script>
+  <script src="voice.js"></script>
+  <script src="focus.js"></script>
   <script src="ghost.js"></script>
   <script src="overlay.js"></script>
 </body>

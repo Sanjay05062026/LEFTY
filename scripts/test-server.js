@@ -52,6 +52,9 @@ async function main() {
   check(got.display.bounds.width === 1536 && got.display.scaleFactor === undefined && got.goal === 'save my secret plan' && got.imageSize.width === 1024,
     'the brain gets the goal, screen size and screenshot size (only the display fields it needs)');
   check(logs.length === 1 && !/secret|plan|Notepad|File/.test(logs.join('\n')) && /device device-1/.test(logs[0]), 'the log has no goal, app or answer: only route, status, time and a short device id');
+  check(got.auto === false, 'Learn mode reaches the brain as auto: false');
+  await remote.nextStep(request({ auto: true }));
+  check(brain.inputs[1].auto === true, 'Do it mode reaches the brain through the server (auto: true)');
   await remote.warmUp();
   check(brain.warmed === 1, 'a warm-up reaches the server');
   brain.checkCode = async (input) => { brain.checked = input; return { problems: [{ line: 2, endLine: 2, message: 'use =', fixed: 'b = 2' }], summary: 'one slip' }; };
@@ -60,8 +63,37 @@ async function main() {
     'the code doctor works through the server too');
   check(!/b==2|add\.py/.test(logs.join('\n')), 'the server log never shows the code or the file name');
 
+  // A private app: the step goes without a screenshot. A spoken goal: the recording goes instead of the words.
+  await remote.nextStep(request({ jpeg: null }));
+  check(brain.inputs[2].jpeg === null && brain.inputs[2].elements.length === 1, 'a private app: no screenshot travels, and the brain gets null (the list only)');
+  const audio = { mime: 'audio/wav', data: Buffer.from('fake wav').toString('base64') };
+  await remote.nextStep(request({ goal: '', audio }));
+  check(brain.inputs[3].audio && brain.inputs[3].audio.data === audio.data && brain.inputs[3].audio.mime === 'audio/wav' && brain.inputs[3].goal === '', 'a spoken goal reaches the brain as the recording');
+  let res = await fetch(`${url}/v1/step`, { method: 'POST', body: JSON.stringify({ ...request({ goal: '' }), display, jpeg: 'eA==', audio: { mime: 'text/html', data: 'eA==' } }) });
+  check(res.status === 400, 'something that is not a recording is refused (400)');
+  res = await fetch(`${url}/v1/step`, { method: 'POST', body: JSON.stringify({ goal: 'x', display, jpeg: 42 }) });
+  check(res.status === 400, 'a screenshot that is not an image is refused (400)');
+  check(!logs.some((l) => /fake wav|ZmFrZSB3YXY/.test(l)), 'the server log never has the recording');
+
+  // "What does this do?" through the server.
+  brain.explain = async (input) => { brain.explained = input; return { text: 'Saves your file.', risky: false, usage: {} }; };
+  const said = await remote.explain({ app: 'Notepad', title: 'plan.txt - Notepad', element: { name: 'Save', type: 'Button', rect: { x: 1, y: 2, w: 3, h: 4 } }, nearby: ['Open'], jpeg: Buffer.from('crop'), spot: { x: 10, y: 10, w: 40, h: 20 }, lang: 'en' });
+  check(said.text === 'Saves your file.' && said.ok === undefined && brain.explained.jpeg.toString() === 'crop' && brain.explained.element.name === 'Save' && !('rect' in brain.explained.element),
+    'explain works through the server: the picture arrives as the same bytes, only the fields the brain needs');
+  await remote.explain({ app: 'KeePass', element: { name: 'Save', type: 'Button' }, jpeg: null });
+  check(brain.explained.jpeg === null && brain.explained.spot === null, 'explain in a private app sends no picture');
+  brain.buildProject = async (input) => { brain.building = input; return { files: [{ path: 'index.html', content: '<h1>Hi</h1>' }], summary: 'A page.', run: 'Open index.html', usage: {} }; };
+  const made = await remote.buildProject({ request: 'a page', files: [{ path: 'a.css', content: 'b{}' }, { path: 'bad', content: 7 }], lang: 'en' });
+  check(made.files[0].path === 'index.html' && made.summary === 'A page.' && made.ok === undefined && brain.building.files.length === 1 && brain.building.request === 'a page',
+    'building works through the server: what to build and the text files there, whole files back');
+  res = await fetch(`${url}/v1/build`, { method: 'POST', body: JSON.stringify({ files: [] }) });
+  check(res.status === 400, 'building without saying what is refused (400)');
+  res = await fetch(`${url}/v1/explain`, { method: 'POST', body: JSON.stringify({ app: 'x' }) });
+  check(res.status === 400, 'explain without a control is refused (400)');
+  check(!logs.some((l) => /plan\.txt|Saves your file/.test(l)), 'the server log never has the window or the answer');
+
   // Health, bad requests, too big.
-  let res = await fetch(`${url}/health`);
+  res = await fetch(`${url}/health`);
   let body = await res.json();
   check(res.status === 200 && body.ok && body.brain === 'fake: test', '/health says it is up and which AI it uses');
   res = await fetch(`${url}/v1/step`, { method: 'POST', body: JSON.stringify({ goal: '' }) });

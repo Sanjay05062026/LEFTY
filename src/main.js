@@ -1,8 +1,9 @@
-const { app, BrowserWindow, Menu, Tray, clipboard, desktopCapturer, globalShortcut, ipcMain, screen, session } = require('electron');
+const { app, BrowserWindow, Menu, Tray, clipboard, desktopCapturer, dialog, globalShortcut, ipcMain, screen, session, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { uIOhook, UiohookKey } = require('uiohook-napi');
 const eyes = require('./eyes');
+const Focus = require('./overlay/focus');
 const brain = require('./brain');
 const remoteBrain = require('./brain-remote');
 const apps = require('./apps');
@@ -10,8 +11,11 @@ const snap = require('./snap');
 const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const { createGate } = require('./shortcut-gate');
+const { createSettings } = require('./settings');
+const history = require('./history');
 
 const SELFTEST = Boolean(process.env.LEFTY_SELFTEST);
+const STARTED_HIDDEN = process.argv.includes('--hidden'); // started with Windows: straight to the tray, no window
 const SHORTCUT = 'Control+Space';
 const SHORTCUT_LABEL = 'Ctrl+Space';
 const SUMMON_DELAY_MS = 350; // the minimize animation, plus a beat for the screen reader to see the new app in front
@@ -26,16 +30,21 @@ let shortcutEnabled = false;  // someone is logged in
 let fullscreenApp = null;      // name of the fullscreen app in front (a game), while there is one
 let useHookFallback = false;
 let showCount = 0; // each summon gets a number so a slow screen read never lands on a newer one
-let overlayInteractive = false; // true while the mouse is over Lefty's bubble
+let overlayInteractive = false; // true while the mouse is over Lefty's bubble (or body, or Stop chip): it takes clicks
 let pointTarget = null;         // what Lefty is pointing at right now (global DIP rect), for click checking
 let readHwnd;                   // self-test only: read this window instead of the user's app
 let tray = null;
 let quitting = false;           // true once the user really quits; until then closing the window only hides it
 let trayHintShown = false;
-let injectingUntil = 0;         // while Lefty presses keys himself (code doctor), the key hooks ignore them
+let injectingUntil = 0;         // while Lefty presses keys or clicks himself (code doctor, Do it mode), the hooks ignore them
+let settings = null;            // Learn or Do it mode, Lefty's size, speaking, private apps (settings.js)
+let lastAppHwnd = 0;            // the app window of the latest screen read: the one Do it mode may act in
+let lastAppProcess = null;      // ...and its process, for the private apps list (null: not read yet)
+let picking = false;            // "What's this?": the next click anywhere picks a control to explain
 
 // The self-test gets its own data folder: it never touches the user's login data or a running Lefty's cache.
 if (SELFTEST) app.setPath('userData', path.join(app.getPath('temp'), 'lefty-selftest'));
+history.init(app.getPath('userData'));
 
 // Two copies of Lefty would both react to Ctrl+Space and cancel each other out.
 const hasLock = SELFTEST || app.requestSingleInstanceLock();
@@ -50,13 +59,46 @@ app.on('before-quit', () => { quitting = true; });
    (keyboard language / IME switching), and then registration fails. In that case a
    low-level keyboard hook watches for Ctrl+Space instead, so Lefty still pops up.
    While a fullscreen app (a game) is in front, Lefty lets go of Ctrl+Space completely: in many games it
-   is crouch + jump, and the game must get it. */
+   is crouch + jump, and the game must get it.
+   A tap shows or hides Lefty. Holding it shows him and he listens while it is held (voice): the release sends what
+   was said. So a tap on an open Lefty hides him when the keys come back up, not when they go down. */
 const shortcutGate = createGate();
+const HOLD_TO_TALK_MS = 450;
+const HOOK_CATCH_UP_MS = 40; // the keyboard hook's own key events may land just after the shortcut's
+let shortcutHeld = null; // { opened, talking, timer } while Ctrl+Space is down
+let comboDown = false;   // Ctrl+Space is down, as the keyboard hook sees it
 
 function onShortcut() {
   if (!shortcutGate.press()) return; // a held key repeats: one press, one toggle
   console.log('[lefty] Ctrl+Space pressed');
-  if (shortcutEnabled && !fullscreenApp) toggleLefty();
+  if (!shortcutEnabled || fullscreenApp) return;
+  const opened = !overlayVisible;
+  if (opened) showLefty();
+  clearTimeout(shortcutHeld && shortcutHeld.timer);
+  const held = { opened, talking: false, timer: null };
+  shortcutHeld = held;
+  // A quick tap can be over (both keys up) before the shortcut itself arrives: a moment later, keys that are already up
+  // mean a tap, not a hold.
+  setTimeout(() => {
+    if (shortcutHeld !== held) return;
+    if (!comboDown) { releaseShortcut(); return; }
+    held.timer = setTimeout(() => {
+      if (shortcutHeld !== held || !overlayVisible) return;
+      held.talking = true;
+      console.log('[lefty] Ctrl+Space held: listening');
+      overlayWindow.webContents.send('voice:hold', { on: true });
+    }, HOLD_TO_TALK_MS - HOOK_CATCH_UP_MS);
+  }, HOOK_CATCH_UP_MS);
+}
+
+function releaseShortcut() {
+  shortcutGate.release();
+  const held = shortcutHeld;
+  shortcutHeld = null;
+  if (!held) return;
+  clearTimeout(held.timer);
+  if (held.talking) overlayWindow.webContents.send('voice:hold', { on: false });
+  else if (!held.opened) hideLefty(); // a tap on an open Lefty closes him
 }
 
 // Holds Ctrl+Space exactly while someone is logged in and no fullscreen app is in front.
@@ -96,13 +138,15 @@ eyes.onScreenMode(({ fullscreen, process: name }) => {
 });
 
 uIOhook.on('keydown', (event) => {
+  const combo = event.keycode === UiohookKey.Space && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
+  if (combo) comboDown = true;
   if (!useHookFallback || Date.now() < injectingUntil) return;
-  if (event.keycode === UiohookKey.Space && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
-    onShortcut();
-  }
+  if (combo) onShortcut();
 });
 uIOhook.on('keyup', (event) => {
-  if ([UiohookKey.Space, UiohookKey.Ctrl, UiohookKey.CtrlRight].includes(event.keycode)) shortcutGate.release();
+  if (![UiohookKey.Space, UiohookKey.Ctrl, UiohookKey.CtrlRight].includes(event.keycode)) return;
+  comboDown = false;
+  releaseShortcut();
 });
 
 /* ---------- Step checking ----------
@@ -110,11 +154,30 @@ uIOhook.on('keyup', (event) => {
    anywhere else means Lefty takes another look. The cursor position is read from Electron (DIPs),
    the same units as the target, so scaled screens need no extra maths. */
 uIOhook.on('mousedown', (event) => {
-  if (event.button === 1) handleClick(screen.getCursorScreenPoint());
+  if (Date.now() < injectingUntil) return; // Lefty's own click in Do it mode
+  const point = screen.getCursorScreenPoint();
+  if (!onLefty(point)) userInput('mouse');
+  if (event.button === 1) handleClick(point);
+});
+
+/* ---------- Stopping Do it mode ----------
+   While Lefty clicks and types for the user, anything the user does (a click with any button, a turn of the wheel, a
+   key) means "I'm taking over" and stops him; moving the mouse doesn't. Main only says that input happened (never
+   which key, except Esc); the overlay decides whether Lefty was working. Clicks and keys on Lefty's own bubble and
+   his own clicks and key presses don't count. */
+let lastWheelSent = 0;
+function userInput(kind, extra = {}) {
+  if (!overlayVisible || Date.now() < injectingUntil) return;
+  overlayWindow.webContents.send('lefty:input', { kind, ...extra });
+}
+uIOhook.on('wheel', () => {
+  if (overlayInteractive || Date.now() - lastWheelSent < 250) return; // one wheel turn sends many events
+  lastWheelSent = Date.now();
+  userInput('wheel');
 });
 
 function handleClick(point) {
-  if (!overlayVisible || overlayInteractive) return; // clicks in Lefty's own bubble don't count
+  if (!overlayVisible || onLefty(point)) return; // clicks in Lefty's own bubble don't count
   if (!pointTarget) {
     overlayWindow.webContents.send('lefty:click', { free: true, x: point.x, y: point.y }); // the screen probably changed: the guard re-reads it
     return;
@@ -127,7 +190,7 @@ function handleClick(point) {
   overlayWindow.webContents.send('lefty:click', { hit, x: point.x, y: point.y });
 }
 
-// Keys matter to a guide too: Ctrl+S saves, Enter confirms a dialog, typing names a file. Only these three
+// Keys matter while Lefty guides: Ctrl+S saves, Enter confirms a dialog, typing names a file. Only these three
 // keys are ever named; for everything else the overlay just hears "typing happened", never which keys.
 let lastTypingSent = 0;
 const MODIFIER_KEYS = [UiohookKey.Ctrl, UiohookKey.CtrlRight, UiohookKey.Alt, UiohookKey.AltRight, UiohookKey.Shift, UiohookKey.ShiftRight, UiohookKey.Meta, UiohookKey.MetaRight];
@@ -135,6 +198,7 @@ const MODIFIER_KEYS = [UiohookKey.Ctrl, UiohookKey.CtrlRight, UiohookKey.Alt, Ui
 const NAV_KEYS = [UiohookKey.ArrowLeft, UiohookKey.ArrowRight, UiohookKey.ArrowUp, UiohookKey.ArrowDown, UiohookKey.Home, UiohookKey.End, UiohookKey.PageUp, UiohookKey.PageDown];
 uIOhook.on('keydown', (event) => {
   if (!overlayVisible || overlayInteractive || Date.now() < injectingUntil) return; // Lefty's own key presses aren't the user's
+  userInput('key', event.keycode === UiohookKey.Escape ? { escape: true } : {});
   if (ghostTimer) setTimeout(pollCaret, CARET_AFTER_KEY_MS); // ghost code keeps up with every key
   let message = null;
   if (event.ctrlKey && event.keycode === UiohookKey.S) message = { combo: event.shiftKey ? 'Ctrl+Shift+S' : 'Ctrl+S' };
@@ -158,7 +222,7 @@ function createMainWindow() {
     title: 'Lefty',
     backgroundColor: '#FFF9F2',
     autoHideMenuBar: true,
-    show: !SELFTEST,
+    show: !SELFTEST && !STARTED_HIDDEN,
     icon: ICON,
     webPreferences: { preload: PRELOAD, contextIsolation: true, nodeIntegration: false },
   });
@@ -190,6 +254,11 @@ function createTray() {
   tray.setToolTip(`Lefty: press ${SHORTCUT_LABEL}`);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Lefty', click: openHome },
+    // Only the installed app can start with Windows (from the code, it would start a bare Electron).
+    ...(app.isPackaged ? [{
+      label: 'Start with Windows', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
+      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] }),
+    }] : []),
     { type: 'separator' },
     { label: 'Quit Lefty', click: () => app.quit() },
   ]));
@@ -231,6 +300,7 @@ function showLefty({ silent = false, hwnd } = {}) {
   if (!silent) {
     overlayWindow.show();
     overlayWindow.focus();
+    grabExplainKey(true);
   }
   overlayWindow.webContents.send('lefty:show', {
     seq,
@@ -242,6 +312,8 @@ function showLefty({ silent = false, hwnd } = {}) {
     originY: display.bounds.y,
   });
   overlayVisible = true;
+  clearInterval(regionTimer);
+  if (!SELFTEST) regionTimer = setInterval(syncInteractive, REGION_POLL_MS); // the self-test never shows the window
   console.log(`[lefty] shown at ${point.x},${point.y}`);
   readUserApp(seq, hwnd);
   if (!SELFTEST) thinker().warmUp().catch(() => {}); // so the first answer is fast too
@@ -258,10 +330,22 @@ async function readApp(hwnd) {
   try {
     const shot = await eyes.snapshot(hwnd);
     const appLabel = eyes.appName(shot.window);
+    lastAppHwnd = shot.window.hwnd;
+    lastAppProcess = shot.window.process || '';
+    // The window's own Close / Minimize / Maximize buttons are marked: pointing never moves onto them, and Do it mode
+    // asks before closing the whole app.
+    const win = shot.window.rect ? toDip(shot.window.rect) : null;
+    // Some apps add their own name: Calculator's are "Close Calculator", "Minimize Calculator".
+    const titleBar = (el, rect) => Boolean(win) && el.type === 'Button' && /^(close|minimi[sz]e|maximi[sz]e|restore( down)?)(\s|$)/i.test(String(el.name).trim())
+      && rect.y < win.y + 60 && rect.x > win.x + win.w - 280;
     // Plus search boxes Windows can't see (VS Code's Extensions box), worked out from the buttons around them.
-    const elements = snap.addHiddenBoxes(shot.elements.map((el) => ({ name: el.name, type: el.type, enabled: el.enabled, rect: toDip(el.rect) })));
+    const elements = snap.addHiddenBoxes(shot.elements.map((el) => {
+      const rect = toDip(el.rect);
+      return { name: el.name, type: el.type, enabled: el.enabled, rect, ...(titleBar(el, rect) ? { titleBar: true } : {}) };
+    }));
     return {
-      ok: true, app: appLabel, title: shot.window.title, elements,
+      ok: true, app: appLabel, title: shot.window.title, elements, process: lastAppProcess,
+      private: settings.isPrivate(lastAppProcess), windowRect: win,
       ms: shot.ms, windows: shot.windows, skipped: shot.skipped, skipError: shot.skipError,
     };
   } catch (error) {
@@ -269,10 +353,14 @@ async function readApp(hwnd) {
   }
 }
 
+// No screenshot (or code) leaves the PC for this read's app. When the app couldn't be read, nobody knows which app it
+// is, so with any app on the private list the answer is no, to be safe.
+const keepPrivate = (seen) => (seen && seen.ok ? Boolean(seen.private) : settings.get().privateApps.length > 0);
+
 function describe(seen) {
   if (!seen.ok) return `nothing, could not read the app: ${seen.error}`;
   const unreadable = seen.skipped ? `, ${seen.skipped} unreadable: ${seen.skipError}` : '';
-  return `${seen.elements.length} clickable things in ${seen.app} (${seen.windows} window${seen.windows === 1 ? '' : 's'}${unreadable}, ${seen.ms} ms)`;
+  return `${seen.elements.length} clickable things in ${seen.app}${seen.private ? ' (a private app)' : ''} (${seen.windows} window${seen.windows === 1 ? '' : 's'}${unreadable}, ${seen.ms} ms)`;
 }
 
 // Reads the app the user was in when they pressed the shortcut and hands its buttons to the overlay.
@@ -288,16 +376,15 @@ function hideLefty() {
   overlayVisible = false;
   pointTarget = null;
   overlayInteractive = false;
+  picking = false;
+  clickRegions = [];
+  clearInterval(regionTimer);
   stopGhost();
+  grabExplainKey(false);
   overlayWindow.webContents.send('lefty:hide');
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
   console.log('[lefty] hidden');
   hideTimer = setTimeout(() => overlayWindow.hide(), 220); // let the exit animation play
-}
-
-function toggleLefty() {
-  if (overlayVisible) hideLefty();
-  else showLefty();
 }
 
 // The shortcut only works while someone is logged in.
@@ -322,9 +409,66 @@ ipcMain.on('lefty:summon', () => {
   setTimeout(() => showLefty(), SUMMON_DELAY_MS);
 });
 ipcMain.on('lefty:request-hide', hideLefty);
-ipcMain.on('overlay:set-interactive', (_event, interactive) => {
-  overlayInteractive = Boolean(interactive);
-  overlayWindow.setIgnoreMouseEvents(!interactive, { forward: true });
+
+// From the home screen's chat: the home window steps aside and Lefty takes the goal to the app in front, in the
+// same chat (so the AI sees the earlier messages and a project built in it is changed, not made again).
+ipcMain.handle('home:ask', (_event, { goal, chatId } = {}) => {
+  const text = String(goal || '').trim().slice(0, 2000);
+  if (!text) return { ok: false };
+  const go = () => {
+    showLefty();
+    setTimeout(() => { if (!overlayWindow.isDestroyed()) overlayWindow.webContents.send('lefty:ask', { goal: text, chatId: chatId || null }); }, 120);
+  };
+  if (SELFTEST || !mainWindow.isVisible() || mainWindow.isMinimized()) go();
+  else { mainWindow.minimize(); setTimeout(go, SUMMON_DELAY_MS); }
+  return { ok: true };
+});
+
+/* ---------- Chat history (history.js): Supabase or this PC. Only the chat text, and never logged. ---------- */
+function historyChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('history:changed');
+}
+ipcMain.handle('history:list', () => history.list());
+ipcMain.handle('history:get', (_event, id) => history.get(id));
+ipcMain.handle('history:usage', () => history.usage());
+ipcMain.handle('history:create', async (_event, title) => { const r = await history.create(title); if (r.ok) historyChanged(); else console.log(`[lefty] history: ${r.error}`); return r; });
+ipcMain.handle('history:add', async (_event, { chatId, role, text } = {}) => { const r = await history.add(chatId, role, text); if (r.ok) historyChanged(); return r; });
+ipcMain.handle('history:project', async (_event, { chatId, folder } = {}) => history.setProject(chatId, folder));
+ipcMain.handle('history:remove', async (_event, id) => { const r = await history.remove(id); if (r.ok) historyChanged(); return r; });
+/* ---------- Lefty's clickable parts ----------
+   The overlay covers the whole screen and lets clicks through to the apps below, except over Lefty's bubble, his
+   body and the Stop chip. Chromium's own "mouse entered" events over a click-through window are not reliable on
+   Windows (now and then one is lost, and a click meant for the bubble landed in the app below it), so main watches
+   the mouse itself: the overlay says where its clickable parts are, and whenever the mouse is over one of them the
+   window takes clicks. */
+const REGION_POLL_MS = 30;
+let clickRegions = [];   // global DIP rects, from the overlay
+let regionTimer = null;
+
+const insideAny = (point, rects) => rects.some((r) => point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h);
+const onLefty = (point) => overlayInteractive || picking || (overlayVisible && !SELFTEST && insideAny(point, clickRegions));
+
+function syncInteractive() {
+  if (picking) return; // the whole screen is Lefty's until the pick
+  const inside = overlayVisible && insideAny(screen.getCursorScreenPoint(), clickRegions);
+  if (inside === overlayInteractive) return;
+  overlayInteractive = inside;
+  overlayWindow.setIgnoreMouseEvents(!inside, { forward: true });
+}
+
+ipcMain.on('overlay:regions', (_event, rects) => {
+  clickRegions = Array.isArray(rects) ? rects.filter((r) => r && [r.x, r.y, r.w, r.h].every(Number.isFinite)) : [];
+  if (!SELFTEST) syncInteractive();
+});
+// "What's this?" from the bubble: the next click anywhere goes to Lefty (it picks the control to explain) instead of
+// the app under it.
+ipcMain.on('overlay:pick', (_event, on) => {
+  picking = Boolean(on) && overlayVisible;
+  if (SELFTEST) return;
+  overlayInteractive = picking;
+  overlayWindow.setIgnoreMouseEvents(!picking, { forward: true });
+  if (picking) overlayWindow.focus(); // so Esc reaches Lefty
+  else syncInteractive();
 });
 ipcMain.on('overlay:target', (_event, rect) => { pointTarget = rect || null; });
 // Menus and dropdowns are always-on-top windows too, and the newest one is drawn above Lefty.
@@ -332,10 +476,13 @@ ipcMain.on('overlay:target', (_event, rect) => { pointTarget = rect || null; });
 ipcMain.on('overlay:raise', () => {
   if (overlayVisible) overlayWindow.moveTop();
 });
+ipcMain.on('overlay:focus', () => {
+  if (overlayVisible && !SELFTEST) overlayWindow.focus();
+});
 // Once Lefty points, the user's next move is a click in their app, so the app gets the keyboard back.
 ipcMain.on('lefty:focus-app', () => {
   if (SELFTEST) return; // never move the user's focus during a background check
-  eyes.focusApp(readHwnd)
+  focusApp(readHwnd)
     .then((result) => console.log(`[lefty] handed focus back to the app (${result.focused ? `ok via ${result.method}` : `Windows refused, attached=${result.attached}`})`))
     .catch((error) => console.log('[lefty] could not hand focus back:', error.message));
 });
@@ -460,12 +607,7 @@ const CLIPBOARD_WAIT_MS = 1500;
 let doctorHwnd = null;
 
 async function press(hwnd, keys) {
-  injectingUntil = Date.now() + 30000;
-  try {
-    await eyes.keys(hwnd, keys);
-  } finally {
-    injectingUntil = Date.now() + 300; // the hooks may see the last keys a moment later
-  }
+  await inject(() => eyes.keys(hwnd, keys));
 }
 
 function saveClipboard() {
@@ -487,7 +629,7 @@ async function editorInFront() {
   const first = await eyes.caret(doctorHwnd || readHwnd);
   const hwnd = first.hwnd;
   if (!EDITOR_FOLDERS[String(first.process || '').toLowerCase()] && first.process) return { error: 'not-editor', process: first.process };
-  await eyes.focusApp(hwnd).catch(() => {});
+  await focusApp(hwnd).catch(() => {});
   await sleep(120);
   let caret = await eyes.caret(hwnd);
   if (!caret.inFront) return { error: 'not-front' };
@@ -509,6 +651,7 @@ ipcMain.handle('doctor:read', async () => {
     doctorHwnd = null;
     const at = await editorInFront();
     if (at.error) return { ok: false, error: at.error };
+    if (settings.isPrivate(at.caret.process)) return { ok: false, error: 'private' }; // its code never leaves the PC
     const title = ((await eyes.windows()).find((w) => w.hwnd === at.hwnd) || {}).title || '';
     // "● add.py - folder - Visual Studio Code" -> add.py; an unsaved tab is "● a = 2 • Untitled-1 - ..." -> Untitled-1.
     const fileName = title.replace(/^[●•*]\s*/, '').split(/\s[-–—]\s/)[0].split(' • ').pop().trim();
@@ -603,6 +746,127 @@ ipcMain.handle('doctor:fix', async (_event, fix) => {
   }
 });
 
+/* ---------- Do it mode ----------
+   Lefty clicks, types, presses keys and scrolls for the user, with real mouse and keyboard input, only in the app
+   the goal is about (the window of the latest screen read, or its menus and dialogs). The helper refuses when
+   another window is in the way, the thing under the point isn't the one expected, or a box is a password box.
+   In the self-test nothing is pressed: the actions are only recorded, so a background check never moves the mouse. */
+const autoActions = []; // self-test only
+const AUTO_ERRORS = ['covered', 'lefty', 'not-front', 'moved', 'password', 'no-window'];
+
+// While Lefty's own input is on its way the hooks ignore input; it may nest (a focus switch inside a key press).
+let injecting = 0;
+async function inject(work) {
+  injecting += 1;
+  injectingUntil = Date.now() + 30000;
+  try {
+    return await work();
+  } finally {
+    injecting -= 1;
+    // The hooks see Lefty's last input a moment later; kept short, since the user's own input in this gap is missed.
+    if (!injecting) injectingUntil = Date.now() + 150;
+  }
+}
+
+// Bringing an app forward may take a bare Alt tap from the helper (Windows only lets the app that sent the last input
+// change the foreground window): that tap is Lefty's, not the user's, so it must not stop Do it mode.
+const focusApp = (hwnd) => inject(() => eyes.focusApp(hwnd));
+
+// The result of a helper action as the overlay wants it: { ok } or { ok: false, error } (one of AUTO_ERRORS, or 'failed').
+async function autoDo(what, work) {
+  try {
+    const reply = await inject(work);
+    console.log(`[lefty] do it: ${what}${reply && reply.found ? ` (on "${reply.found}")` : ''}`);
+    return { ok: true };
+  } catch (error) {
+    const code = AUTO_ERRORS.includes(error.message) ? error.message : 'failed';
+    const found = error.reply && error.reply.found ? `, found "${error.reply.found}"` : '';
+    console.log(`[lefty] do it: could not ${what}: ${error.message}${found}`);
+    return { ok: false, error: code };
+  }
+}
+
+const centreOf = (rect) => screen.dipToScreenPoint({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
+
+ipcMain.handle('auto:click', async (_event, { rect, button = 'left', count = 1, expect = '' }) => {
+  if (SELFTEST) { autoActions.push({ act: 'click', rect, button, count, expect }); return { ok: true }; }
+  const point = centreOf(rect);
+  const how = count === 2 ? 'double-click' : button === 'right' ? 'right-click' : 'click';
+  return autoDo(`${how} ${expect ? `"${expect}"` : 'a spot'} at ${point.x},${point.y}`,
+    () => eyes.click(lastAppHwnd, { ...point, button, count, expect }));
+});
+
+// What's under the middle of a rect, before Lefty clicks a spot the AI guessed: { name, type } or null.
+ipcMain.handle('auto:peek', async (_event, { rect }) => {
+  if (SELFTEST) return null;
+  try {
+    const { name, type } = await eyes.peek(centreOf(rect));
+    return { name, type };
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('auto:type', async (_event, { text }) => {
+  if (SELFTEST) { autoActions.push({ act: 'type', text }); return { ok: true }; }
+  return autoDo(`type ${String(text).length} characters`, () => eyes.type(lastAppHwnd, text)); // never the text itself
+});
+
+ipcMain.handle('auto:keys', async (_event, { keys }) => {
+  if (SELFTEST) { autoActions.push({ act: 'keys', keys }); return { ok: true }; }
+  return autoDo(`press ${keys.join(' ')}`, async () => {
+    try {
+      return await eyes.keys(lastAppHwnd, keys, { anyAppWindow: true });
+    } catch (error) {
+      if (!/not in front/.test(error.message)) throw error;
+      await focusApp(lastAppHwnd); // Lefty's own bubble had the keyboard (the user pressed Continue)
+      await sleep(80);
+      return eyes.keys(lastAppHwnd, keys, { anyAppWindow: true });
+    }
+  });
+});
+
+ipcMain.handle('auto:scroll', async (_event, { rect, notches }) => {
+  if (SELFTEST) { autoActions.push({ act: 'scroll', rect, notches }); return { ok: true }; }
+  return autoDo(`scroll ${notches > 0 ? 'up' : 'down'}`, () => eyes.scroll(lastAppHwnd, { ...centreOf(rect), notches }));
+});
+
+// Code Lefty writes himself (Do it mode instead of ghost code): pasted on a new line below the text cursor in VS Code,
+// so nothing already there is touched. The user's clipboard is put back afterwards.
+ipcMain.handle('auto:code', async (_event, { code }) => {
+  const lines = String(code).split('\n').length;
+  if (SELFTEST) { autoActions.push({ act: 'code', lines }); return { ok: true }; }
+  try {
+    doctorHwnd = null;
+    const at = await editorInFront();
+    if (at.error) return { ok: false, error: at.error };
+    const saved = saveClipboard();
+    try {
+      clipboard.writeText(code);
+      // A new line under the cursor's line, without the editor's auto-indent (the code brings its own).
+      await press(at.hwnd, ['end', 'enter', 'wait:80', 'shift+home', 'wait:40', 'ctrl+v', 'wait:250']);
+    } finally {
+      restoreClipboard(saved);
+    }
+    console.log(`[lefty] do it: wrote ${lines} lines of code`);
+    return { ok: true };
+  } catch (error) {
+    console.log(`[lefty] do it: could not write the code: ${error.message}`);
+    return { ok: false, error: 'failed' };
+  }
+});
+
+/* ---------- Settings ----------
+   Learn or Do it mode, Lefty's size, speaking and the private apps: changed from the chat bubble or the home screen,
+   saved, and sent to both. */
+ipcMain.handle('settings:get', () => settings.get());
+ipcMain.handle('settings:set', (_event, changes) => {
+  const now = settings.set(changes || {});
+  console.log(`[lefty] settings: mode ${now.mode}, size ${now.size}, speak ${now.speak}, ${now.privateApps.length} private app(s)`);
+  for (const win of [mainWindow, overlayWindow]) if (win && !win.isDestroyed()) win.webContents.send('settings:changed', now);
+  return now;
+});
+
 /* ---------- The brain ----------
    For goals Lefty can't do on his own, the overlay asks for the next step: a screenshot of the screen Lefty is
    on plus a fresh read of the app's clickable things go to the AI (brain.js), or to Lefty's backend when
@@ -642,18 +906,26 @@ async function captureScreen(display) {
 
 function friendlyBrainError(error) {
   const status = error && error.status;
-  if (error && error.message === 'no API key') return "My brain isn't connected: there's no API key. 🧠";
+  if (error && error.message === 'no API key') return "The AI isn't connected: there's no API key.";
   if (error && error.remote) { // Lefty's backend answered with a problem
-    if (status === 401) return "My brain server didn't accept this copy of Lefty. 🔑 Check LEFTY_APP_TOKEN in the .env file.";
-    if (status === 429) return "I'm being asked to slow down. ⏳ Give me a few seconds and ask again.";
-    if (status === 503) return "My brain server has no AI key yet. 🧠";
-    return 'My brain server is busy right now. 😵 Try again in a moment.';
+    if (status === 401) return "The AI server didn't accept this copy of Lefty. Check LEFTY_APP_TOKEN in the .env file.";
+    if (status === 429) return "I'm being asked to slow down. Give me a few seconds and ask again.";
+    if (status === 503) return "The AI server has no AI key yet.";
+    return 'The AI server is busy right now. Try again in a moment.';
   }
-  if (status === 401 || status === 403) return 'My API key was refused. 🔑 Check the key in the .env file.';
-  if (status === 429) return 'Google asked me to slow down. ⏳ Give me a few seconds and ask again.';
-  if (status === 529 || status >= 500) return 'My brain is busy right now. 😵 Try again in a moment.';
-  if (error && /timed? ?out|ETIMEDOUT|ECONN|ENOTFOUND|fetch failed/i.test(error.message)) return "I couldn't reach my brain. 🌐 Check your internet and try again.";
-  return 'My brain had a hiccup. 😵 Try again in a moment.';
+  if (status === 401 || status === 403) return 'My API key was refused. Check the key in the .env file.';
+  if (status === 429) return 'Google asked me to slow down. Give me a few seconds and ask again.';
+  if (status === 529 || status >= 500) return "The AI's free servers are busy right now. Please try again in a moment.";
+  if (error && (error.timeout || /timed? ?out/i.test(error.message))) return "The AI's free servers are very busy and didn't answer in time. Please try again in a moment.";
+  if (error && /ETIMEDOUT|ECONN|ENOTFOUND|EAI_AGAIN|fetch failed/i.test(error.message)) return "I couldn't reach the AI. Check your internet and try again.";
+  return 'The AI ran into a problem. Try again in a moment.';
+}
+
+// A spoken goal from the overlay: a short recording, { mime, data } in base64. Anything else is dropped.
+const MAX_AUDIO_CHARS = 6 * 1024 * 1024;
+function audioOf(audio) {
+  if (!audio || !/^audio\/(wav|webm|ogg|mpeg|mp3|flac)$/.test(String(audio.mime || ''))) return null;
+  return typeof audio.data === 'string' && audio.data && audio.data.length <= MAX_AUDIO_CHARS ? { mime: audio.mime, data: audio.data } : null;
 }
 
 ipcMain.handle('lefty:brain-ready', () => !SELFTEST && thinker().ready());
@@ -662,15 +934,23 @@ ipcMain.handle('lefty:think', async (_event, request) => {
   const started = Date.now();
   try {
     const display = screen.getDisplayMatching(overlayWindow.getBounds());
-    const [seen, shot, windows] = await Promise.all([readApp(readHwnd), captureScreen(display), openWindows()]);
+    const [seen, windows] = await Promise.all([readApp(readHwnd), openWindows()]);
+    // Apps on the user's private list never get a screenshot taken: the AI works from their buttons alone.
+    const hidden = keepPrivate(seen);
+    if (!seen.ok && hidden) return { ok: false, error: "I couldn't read this app's buttons, and I don't take screenshots while you have private apps. Click into the app and ask me again." };
+    const shot = hidden ? null : await captureScreen(display);
     // The screenshot is enough to see the screen: when the button list can't be read, the AI points from the
     // picture alone (less exact, but Lefty never gives up just because an app won't share its buttons).
     if (!seen.ok) console.log(`[lefty] brain gets the screenshot only (buttons unreadable: ${seen.error})`);
+    if (hidden) console.log(`[lefty] brain gets the button list only (${seen.app} is a private app: no screenshot)`);
+    const audio = audioOf(request.audio);
+    if (audio) console.log(`[lefty] brain gets a spoken goal (${Math.round((audio.data.length * 3) / 4 / 1024)} KB of audio)`); // never what was said
     const openApps = windows.filter((w) => !seen.ok || w.title !== seen.title).map((w) => ({ app: eyes.appName(w), title: w.title }));
     const step = await thinker().nextStep({
-      goal: String(request.goal || ''), history: request.history || [], note: request.note || '',
+      goal: String(request.goal || ''), history: request.history || [], note: request.note || '', auto: Boolean(request.auto),
+      earlier: Array.isArray(request.earlier) ? request.earlier.slice(-12).map((m) => String(m).slice(0, 600)) : [],
       app: seen.ok ? seen.app : 'the app in the screenshot', title: seen.ok ? seen.title : '',
-      elements: seen.ok ? seen.elements : [], display, jpeg: shot.jpeg, imageSize: shot.imageSize, openApps,
+      elements: seen.ok ? seen.elements : [], display, jpeg: shot ? shot.jpeg : null, imageSize: shot ? shot.imageSize : display.size, openApps, audio,
     });
     const usage = step.usage || {};
     const where = step.target ? ` -> ${step.target.type} "${step.target.name}"${step.target.snappedFrom ? ` (snapped from ${step.target.snappedFrom})` : ''}` : step.app ? ` -> app "${step.app}"`
@@ -683,6 +963,342 @@ ipcMain.handle('lefty:think', async (_event, request) => {
     console.log(`[lefty] brain failed after ${Date.now() - started} ms: ${error.status || ''} ${error.message}`);
     return { ok: false, error: friendlyBrainError(error) };
   }
+});
+
+/* ---------- "What does this do?" ----------
+   With Lefty on screen, F1 (or "What's this?" in the bubble, then a click) asks about the control under the mouse.
+   The AI gets its name and type, the controls around it and a small picture of the area around it (never in a
+   private app), and explains it in a sentence or two. F1 is only Lefty's while he is on screen. */
+const EXPLAIN_KEY = 'F1';
+const EXPLAIN_PAD = { x: 170, y: 90 }; // DIPs of the screen kept around the control in the picture
+const EXPLAIN_WIDTH = 720;
+
+function grabExplainKey(on) {
+  if (SELFTEST) return;
+  if (on && !globalShortcut.isRegistered(EXPLAIN_KEY)) {
+    const ok = globalShortcut.register(EXPLAIN_KEY, () => {
+      if (overlayVisible) overlayWindow.webContents.send('lefty:explain', screen.getCursorScreenPoint());
+    });
+    if (!ok) console.log(`[lefty] ${EXPLAIN_KEY} is taken by another app: "What's this?" still works from the bubble`);
+  } else if (!on && globalShortcut.isRegistered(EXPLAIN_KEY)) {
+    globalShortcut.unregister(EXPLAIN_KEY);
+  }
+}
+
+// A picture of the screen around rect (global DIPs) with the control in the middle, and where the control is in it.
+async function captureAround(rect) {
+  const display = screen.getDisplayNearestPoint({ x: Math.round(rect.x + rect.w / 2), y: Math.round(rect.y + rect.h / 2) });
+  overlayWindow.setContentProtection(true);
+  try {
+    await sleep(50);
+    const k = display.scaleFactor || 1;
+    const size = { width: Math.round(display.size.width * k), height: Math.round(display.size.height * k) };
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size });
+    const source = sources.find((s) => s.display_id === String(display.id)) || sources[0];
+    if (!source) throw new Error('no screen to capture');
+    const image = source.thumbnail;
+    const px = image.getSize().width / display.size.width; // image pixels per DIP
+    const left = Math.max(0, rect.x - display.bounds.x - EXPLAIN_PAD.x);
+    const top = Math.max(0, rect.y - display.bounds.y - EXPLAIN_PAD.y);
+    const right = Math.min(display.size.width, rect.x - display.bounds.x + rect.w + EXPLAIN_PAD.x);
+    const bottom = Math.min(display.size.height, rect.y - display.bounds.y + rect.h + EXPLAIN_PAD.y);
+    let crop = image.crop({ x: Math.round(left * px), y: Math.round(top * px), width: Math.max(1, Math.round((right - left) * px)), height: Math.max(1, Math.round((bottom - top) * px)) });
+    if (crop.getSize().width > EXPLAIN_WIDTH) crop = crop.resize({ width: EXPLAIN_WIDTH });
+    const out = crop.getSize().width / (right - left); // picture pixels per DIP
+    const spot = { x: (rect.x - display.bounds.x - left) * out, y: (rect.y - display.bounds.y - top) * out, w: rect.w * out, h: rect.h * out };
+    return { jpeg: crop.toJPEG(80), spot };
+  } finally {
+    overlayWindow.setContentProtection(false);
+  }
+}
+
+ipcMain.handle('lefty:explain', async (_event, request) => {
+  const element = request && request.element;
+  if (!element || !element.rect || ![element.rect.x, element.rect.y, element.rect.w, element.rect.h].every(Number.isFinite)) return { ok: false, error: 'nothing' };
+  if (SELFTEST || !thinker().ready()) return { ok: false, error: 'no-brain' };
+  const started = Date.now();
+  const hidden = lastAppProcess == null ? settings.get().privateApps.length > 0 : settings.isPrivate(lastAppProcess);
+  try {
+    const shot = hidden ? null : await captureAround(element.rect);
+    const nearby = Array.isArray(request.nearby) ? request.nearby.map(String) : [];
+    const result = await thinker().explain({
+      app: String(request.app || ''), title: String(request.title || ''), element: { name: String(element.name || ''), type: String(element.type || '') },
+      nearby, jpeg: shot && shot.jpeg, spot: shot && shot.spot, lang: String(request.lang || ''),
+    });
+    console.log(`[lefty] explained ${element.type} "${element.name}" (${thinker().label()}, ${Date.now() - started} ms${hidden ? ', no picture: a private app' : ''})`);
+    return { ok: true, text: result.text, risky: Boolean(result.risky) };
+  } catch (error) {
+    console.log(`[lefty] could not explain "${element.name}" after ${Date.now() - started} ms: ${error.status || ''} ${error.message}`);
+    return { ok: false, error: friendlyBrainError(error) };
+  }
+});
+
+// The apps open right now, for adding one to the private list: [{ process, app }].
+ipcMain.handle('apps:running', async () => {
+  const seen = new Map();
+  for (const w of await openWindows()) {
+    const process = String(w.process || '').toLowerCase();
+    if (process && !seen.has(process) && process !== 'electron') seen.set(process, { process, app: eyes.appName(w) || process });
+  }
+  return [...seen.values()];
+});
+
+/* ---------- Focus mode ----------
+   "Focus 30 minutes on Chrome and physics": until the time is up, the window in front is checked every moment, and
+   anything that isn't the user's work (focus.js allowed) is closed: a browser tab with Ctrl+W, any other window as its
+   X button would (so an app can still ask to save). A window that is still there after that is minimized instead, so
+   a save prompt never loops. Lefty doesn't open his chat for it: he glides to the tab's close button (or the window's
+   X), presses it, and a small tag beside him says why, then he goes again. Only the app's name is logged, never a
+   window title. */
+const FOCUS_CHECK_MS = 1500;
+const FOCUS_GRACE_MS = 4000;  // a moment to switch to the work after starting
+const FOCUS_GLIDE_MS = 900;   // Lefty reaches the close button before it is pressed
+const FOCUS_TAG_MS = 4500;    // how long the tag stays after closing
+let focus = null;             // { until, allow, startedAt, minutes, timer, tried: Map<root, time> }
+let focusChecking = false;
+
+const focusState = () => (focus ? { on: true, until: focus.until, allow: focus.allow, minutes: focus.minutes } : { on: false });
+function focusChanged() {
+  for (const win of [mainWindow, overlayWindow]) if (win && !win.isDestroyed()) win.webContents.send('focus:changed', focusState());
+}
+
+// Lefty comes up and says it, in place of his greeting.
+function focusSay(kind, data = {}) {
+  if (SELFTEST) return;
+  if (!overlayVisible) showLefty();
+  setTimeout(() => overlayWindow.webContents.send('focus:notice', { kind, ...data }), overlayVisible ? 0 : SUMMON_DELAY_MS);
+}
+
+// Where the close button is, in DIPs: the tab's own close button in a browser (the tab whose name starts the window
+// title), the window's X otherwise. null if it can't be found (Lefty then stays where he is).
+async function focusCloseButton(win, browser) {
+  const shot = await eyes.snapshot(win.root);
+  const els = (shot && shot.elements) || [];
+  const inside = (a, b) => a.x >= b.x - 2 && a.y >= b.y - 2 && a.x + a.w <= b.x + b.w + 2 && a.y + a.h <= b.y + b.h + 2;
+  let hit = null;
+  if (browser) {
+    const closers = els.filter((e) => e.type === 'Button' && /^close( tab)?$/i.test(e.name || '') && e.rect && e.rect.w < 40);
+    const title = String(win.title || '').toLowerCase();
+    const tab = els.find((e) => e.type === 'TabItem' && e.name && e.rect && title.startsWith(e.name.toLowerCase().slice(0, 40)));
+    hit = tab ? closers.find((c) => inside(c.rect, tab.rect)) : (closers.length === 1 ? closers[0] : null);
+  } else {
+    const xs = els.filter((e) => e.type === 'Button' && /^close$/i.test(e.name || '') && e.rect);
+    hit = xs.sort((a, b) => (a.rect.y - b.rect.y) || (b.rect.x - a.rect.x))[0] || null; // the top-right one
+  }
+  return hit ? toDip(hit.rect) : null;
+}
+
+// Lefty without his chat: shown without taking the keyboard (the key press that closes a tab needs the browser in
+// front), on the screen of the window being closed. Returns how to end it.
+function focusBlockShow({ rect, app, left }) {
+  const quiet = !overlayVisible;
+  const seq = showCount;
+  const cursor = screen.getCursorScreenPoint();
+  const display = rect ? screen.getDisplayMatching({ x: rect.x, y: rect.y, width: rect.w, height: rect.h }) : screen.getDisplayNearestPoint(cursor);
+  if (quiet) {
+    clearTimeout(hideTimer);
+    overlayWindow.setBounds(display.bounds);
+    overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+    overlayWindow.showInactive();
+  }
+  const b = quiet ? display.bounds : overlayWindow.getBounds();
+  overlayWindow.webContents.send('focus:block', {
+    quiet, app, left, rect,
+    area: { width: b.width, height: b.height, originX: b.x, originY: b.y },
+    cursor: { x: cursor.x - b.x, y: cursor.y - b.y },
+  });
+  return () => {
+    if (overlayWindow.isDestroyed()) return;
+    if (showCount !== seq) return; // the user called Lefty meanwhile: his chat is in charge now
+    overlayWindow.webContents.send('focus:block-end', { quiet });
+    if (quiet && !overlayVisible) hideTimer = setTimeout(() => { if (!overlayVisible) overlayWindow.hide(); }, 220);
+  };
+}
+
+function stopFocus(reason) {
+  if (!focus) return;
+  clearInterval(focus.timer);
+  const { minutes } = focus;
+  focus = null;
+  console.log(`[lefty] focus mode ended (${reason})`);
+  focusChanged();
+  if (reason === 'time') focusSay('done', { minutes });
+}
+
+async function checkFocus() {
+  if (!focus || focusChecking) return;
+  if (Date.now() >= focus.until) { stopFocus('time'); return; }
+  if (Date.now() - focus.startedAt < FOCUS_GRACE_MS) return;
+  focusChecking = true;
+  try {
+    const win = await eyes.front();
+    if (!focus || Focus.allowed(win, focus.allow)) return;
+    const name = eyes.appName({ process: win.process, title: win.title });
+    const browser = Focus.isBrowser(win.process);
+    const triedAt = focus.tried.get(win.root);
+    if (triedAt && Date.now() - triedAt < FOCUS_CHECK_MS * 2) return; // give it a moment to close
+    const minimizing = Boolean(triedAt && !browser);
+    const rect = SELFTEST || minimizing ? null : await focusCloseButton(win, browser).catch(() => null);
+    const end = SELFTEST ? () => {} : focusBlockShow({ rect, app: name, left: focus.until - Date.now() });
+    if (!SELFTEST) await new Promise((resolve) => setTimeout(resolve, rect ? FOCUS_GLIDE_MS : 300));
+    if (!focus) { end(); return; }
+    const now = await eyes.front().catch(() => null); // still the same window in front? (the user may have left it)
+    if (!now || now.root !== win.root) { end(); return; }
+    if (minimizing) {
+      await eyes.closeWindow(win.root, { minimize: true }); // asked to close, still here (a save prompt): out of the way
+      console.log(`[lefty] focus: minimized ${name}`);
+    } else if (browser) {
+      injectingUntil = Date.now() + 400; // Lefty's own keys, not the user's
+      await eyes.keys(win.hwnd, ['ctrl+w']);
+      console.log(`[lefty] focus: closed a tab in ${name}`);
+    } else {
+      await eyes.closeWindow(win.root);
+      console.log(`[lefty] focus: closed ${name}`);
+    }
+    focus.tried.set(win.root, Date.now());
+    setTimeout(end, FOCUS_TAG_MS);
+  } catch (error) {
+    console.log(`[lefty] focus check failed: ${error.message}`);
+  } finally {
+    focusChecking = false;
+  }
+}
+
+ipcMain.handle('focus:start', (_event, request = {}) => {
+  const minutes = Math.round(Number(request.minutes));
+  if (!(minutes >= 1 && minutes <= Focus.MAX_MINUTES)) return { ok: false, error: `Pick between 1 and ${Focus.MAX_MINUTES} minutes.` };
+  const allow = (Array.isArray(request.allow) ? request.allow : []).map((a) => String(a).trim().slice(0, 60)).filter(Boolean).slice(0, 10);
+  if (!allow.length) return { ok: false, error: 'Tell me which apps or tabs are for your work.' };
+  if (focus) clearInterval(focus.timer);
+  focus = { until: Date.now() + minutes * 60000, allow, minutes, startedAt: Date.now(), tried: new Map(), timer: null };
+  if (!SELFTEST) focus.timer = setInterval(checkFocus, FOCUS_CHECK_MS);
+  console.log(`[lefty] focus mode on: ${minutes} min, ${allow.length} allowed`);
+  focusChanged();
+  return { ok: true, ...focusState() };
+});
+ipcMain.handle('focus:stop', () => { stopFocus('stopped'); return { ok: true }; });
+ipcMain.handle('focus:get', () => focusState());
+
+/* ---------- Building a project ----------
+   "Build me a portfolio website": the user says which folder (typed, or picked in Windows' folder dialog), Lefty reads
+   the text files already there, the AI writes whole files, and they are saved into that folder only: every path is
+   checked to stay inside it. A file that is replaced is copied to .lefty-backup first, so nothing is lost. Only counts
+   are logged, never file names or code. */
+const MAX_READ_FILES = 150;
+const MAX_READ_BYTES = 200 * 1024;
+const SKIP_DIRS = new Set(['node_modules', '.git', '.lefty-backup', 'dist', 'build', '.next', '__pycache__', '.venv', 'venv', 'bin', 'obj']);
+const TEXT_FILE = /\.(html?|css|scss|less|js|mjs|cjs|jsx|ts|tsx|json|md|txt|py|java|c|h|cpp|hpp|cs|go|rs|rb|php|kt|swift|sql|sh|bat|ps1|yml|yaml|toml|ini|xml|svg|vue|svelte|dart|lua|r)$/i;
+
+// A folder Lefty may build in: a full path, not a drive's root and not inside Windows or Program Files.
+function projectFolder(value) {
+  const raw = String(value || '').trim().replace(/^"(.*)"$/, '$1');
+  if (!raw || !path.isAbsolute(raw) || /[<>|?*"&^%]/.test(raw)) return null; // & ^ % mean something to cmd (opening VS Code)
+  const folder = path.resolve(raw);
+  if (folder === path.parse(folder).root) return null;
+  const banned = [process.env.WINDIR, process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramData]
+    .filter(Boolean).map((p) => path.resolve(p).toLowerCase());
+  if (banned.some((b) => folder.toLowerCase() === b || folder.toLowerCase().startsWith(b + path.sep))) return null;
+  return folder;
+}
+
+// The text files already in the folder, for the AI to change: [{ path (with /), content }].
+function readProject(folder) {
+  const files = [];
+  const walk = (dir, rel) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (files.length >= MAX_READ_FILES) return;
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) { if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) walk(path.join(dir, entry.name), relPath); continue; }
+      if (!entry.isFile() || !TEXT_FILE.test(entry.name) || /^\.env/i.test(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      try {
+        if (fs.statSync(full).size > MAX_READ_BYTES) continue;
+        files.push({ path: relPath, content: fs.readFileSync(full, 'utf8') });
+      } catch { /* unreadable: left out */ }
+    }
+  };
+  walk(folder, '');
+  return files;
+}
+
+ipcMain.handle('build:suggest', (_event, name) => {
+  const slug = String(name || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'my-project';
+  // A new project gets a folder of its own: "website", then "website-2", never one that already has files in it.
+  const base = path.join(app.getPath('documents'), 'Lefty Projects', slug);
+  const taken = (folder) => { try { return fs.readdirSync(folder).length > 0; } catch { return false; } };
+  for (let n = 1; n < 100; n += 1) {
+    const folder = n === 1 ? base : `${base}-${n}`;
+    if (!taken(folder)) return folder;
+  }
+  return `${base}-${Date.now()}`;
+});
+
+ipcMain.handle('build:pick', async (_event, current) => {
+  if (SELFTEST) return { ok: false };
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Where should Lefty build it?', defaultPath: projectFolder(current) || app.getPath('documents'),
+    properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+  });
+  if (canceled || !filePaths.length) return { ok: false, canceled: true };
+  return { ok: true, folder: filePaths[0] };
+});
+
+ipcMain.handle('build:run', async (_event, { folder: wanted, request, lang } = {}) => {
+  const folder = projectFolder(wanted);
+  if (!folder) return { ok: false, error: "I can't build there. Pick a full folder path like C:\\Users\\you\\Documents\\my-site (not a drive or Windows folder)." };
+  if (!String(request || '').trim()) return { ok: false, error: 'Tell me what to build.' };
+  if (!thinker().ready()) return { ok: false, error: 'no-brain' };
+  const started = Date.now();
+  try {
+    fs.mkdirSync(folder, { recursive: true });
+    const existing = readProject(folder);
+    const result = await thinker().buildProject({ request: String(request).slice(0, 4000), files: existing, lang: String(lang || '') });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const written = [];
+    let changed = 0;
+    for (const file of result.files || []) {
+      const rel = brain.safePath(file.path);
+      const full = rel && path.resolve(folder, rel);
+      if (!full || !full.startsWith(folder + path.sep) || typeof file.content !== 'string') continue;
+      if (fs.existsSync(full)) {
+        if (!fs.statSync(full).isFile()) continue;
+        if (fs.readFileSync(full, 'utf8') === file.content) continue; // the same: nothing to do
+        const backup = path.join(folder, '.lefty-backup', stamp, rel);
+        fs.mkdirSync(path.dirname(backup), { recursive: true });
+        fs.copyFileSync(full, backup);
+        changed += 1;
+      }
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, file.content);
+      written.push(rel);
+    }
+    console.log(`[lefty] built a project (${thinker().label()}, ${Date.now() - started} ms): ${written.length} file(s), ${changed} replaced, ${existing.length} read`);
+    if (!written.length) return { ok: false, error: 'Nothing needed to change.' };
+    return { ok: true, folder, files: written, changed, summary: result.summary || '', run: result.run || '', hasIndex: written.includes('index.html') || fs.existsSync(path.join(folder, 'index.html')) };
+  } catch (error) {
+    console.log(`[lefty] could not build after ${Date.now() - started} ms: ${error.status || ''} ${error.message}`);
+    return { ok: false, error: friendlyBrainError(error) };
+  }
+});
+
+// Opens the finished project: its folder in VS Code (or File Explorer when VS Code isn't there), or index.html in
+// the browser.
+ipcMain.handle('build:open', async (_event, { folder: wanted, how } = {}) => {
+  const folder = projectFolder(wanted);
+  if (!folder || !fs.existsSync(folder) || SELFTEST) return { ok: false };
+  if (how === 'browser') {
+    const index = path.join(folder, 'index.html');
+    return { ok: fs.existsSync(index) && !(await shell.openPath(index)) };
+  }
+  if (how === 'code') {
+    const opened = await new Promise((resolve) => {
+      execFile('cmd.exe', ['/d', '/c', 'code', folder], { windowsHide: true }, (error) => resolve(!error));
+    });
+    if (opened) return { ok: true };
+  }
+  return { ok: !(await shell.openPath(folder)) };
 });
 
 /* ---------- The app a goal is about ----------
@@ -723,7 +1339,7 @@ ipcMain.handle('lefty:open-app', async (_event, name) => {
   console.log(`[lefty] looking for ${name} among ${windows.length} open windows: ${windows.map((w) => eyes.appName(w)).join(', ')}`);
   const found = apps.findWindow(name, windows, eyes.appName);
   if (found) {
-    if (!SELFTEST) await eyes.focusApp(found.hwnd).catch(() => {});
+    if (!SELFTEST) await focusApp(found.hwnd).catch(() => {});
     console.log(`[lefty] switched to ${eyes.appName(found)} ("${found.title}")`);
     return { ok: true, switched: true, app: eyes.appName(found) };
   }
@@ -742,7 +1358,7 @@ ipcMain.handle('lefty:launch-app', async (_event, { app: name, appId }) => {
     const found = apps.findWindow(name, await openWindows(), eyes.appName);
     if (found) {
       await sleep(1000); // let the app draw its window before Lefty looks at it
-      await eyes.focusApp(found.hwnd).catch(() => {});
+      await focusApp(found.hwnd).catch(() => {});
       console.log(`[lefty] ${name} is open ("${found.title}")`);
       return { ok: true, app: eyes.appName(found) };
     }
@@ -755,6 +1371,7 @@ app.whenReady().then(() => {
   if (!hasLock) return;
   if (!SELFTEST) setTimeout(() => loadStartApps(), 3000); // ready before anyone asks, without slowing the start
   remoteBrain.setDevice(deviceId());
+  settings = createSettings(path.join(app.getPath('userData'), 'settings.json'));
   createMainWindow();
   createOverlayWindow();
   if (!SELFTEST) createTray();
@@ -762,7 +1379,7 @@ app.whenReady().then(() => {
   // Start the screen reader early so the first Ctrl+Space is fast and it already knows the user's app.
   eyes.start(process.pid).catch((error) => console.log('[lefty] screen reader failed to start:', error.message));
   if (SELFTEST) {
-    require('../scripts/selftest').run({ app, mainWindow, overlayWindow, showLefty, toDip, handleClick, getTarget: () => pointTarget });
+    require('../scripts/selftest').run({ app, mainWindow, overlayWindow, showLefty, toDip, handleClick, getTarget: () => pointTarget, autoActions, userInput });
     return;
   }
   uIOhook.start();

@@ -1,20 +1,30 @@
 // Lefty's on-screen body: appears next to the mouse when the shortcut is pressed.
 // He reads the app you're in and points at the button you name; any other goal goes to his AI brain
-// (through the main process), which plans it one step at a time from a screenshot.
+// (through the main process), which plans it one step at a time from a screenshot. Goals can be typed or spoken,
+// he can explain any button ("What does this do?"), keep the user focused for a while, and build whole projects.
 
 const api = window.lefty;
+// Line icons for the buttons whose picture changes (drawn in the text colour).
+const ICONS = {
+  speakerOn: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg>',
+  speakerOff: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>',
+};
 // Not named `lefty`: that name is taken by the window.lefty bridge from preload.js.
 const leftyEl = document.getElementById('lefty');
+const leftyBody = leftyEl.querySelector('.lefty-body');
 const bubble = document.getElementById('bubble');
 const ring = document.getElementById('ring');
 const stepTag = document.getElementById('steptag');
 const messages = document.getElementById('messages');
 const form = document.getElementById('ask');
 const input = document.getElementById('goal');
+const micButton = document.getElementById('mic');
+const speakButton = document.getElementById('speak');
 
-const LEFTY_WIDTH = 64;
-const LEFTY_HEIGHT = 90;
-const LEFTY_TIP = 5; // the pointer tip sits this far inside the top-left of the drawing
+// Lefty's size on screen (the Small / Normal / Large setting): width in px; the drawing is 74 x 104 with the pointer
+// tip 6 units inside its top-left corner.
+const SIZES = { small: 30, normal: 40, large: 56 };
+const leftySize = { w: SIZES.normal, h: Math.round((SIZES.normal * 104) / 74), tip: Math.round((SIZES.normal * 6) / 74) };
 const BUBBLE_WIDTH = 320;
 const GAP = 14;
 const RING_PAD = 4;
@@ -33,13 +43,13 @@ function setPosition(el, x, y) {
 
 function place({ x, y, width, height }) {
   // Sit just below-right of the real mouse pointer so it isn't covered.
-  const leftyX = Math.min(x + 12, width - LEFTY_WIDTH - GAP);
-  const leftyY = Math.min(y + 12, height - LEFTY_HEIGHT - GAP);
+  const leftyX = Math.min(x + 12, width - leftySize.w - GAP);
+  const leftyY = Math.min(y + 12, height - leftySize.h - GAP);
   setPosition(leftyEl, leftyX, leftyY);
 
   // Bubble goes to the right of Lefty, or flips left near the screen edge.
-  const fitsRight = leftyX + LEFTY_WIDTH + GAP + BUBBLE_WIDTH < width - GAP;
-  const bubbleX = fitsRight ? leftyX + LEFTY_WIDTH + GAP : Math.max(GAP, leftyX - BUBBLE_WIDTH - GAP);
+  const fitsRight = leftyX + leftySize.w + GAP + BUBBLE_WIDTH < width - GAP;
+  const bubbleX = fitsRight ? leftyX + leftySize.w + GAP : Math.max(GAP, leftyX - BUBBLE_WIDTH - GAP);
   const bubbleHeight = bubble.offsetHeight || 230;
   const bubbleY = Math.max(GAP, Math.min(leftyY - 10, height - bubbleHeight - GAP));
   setPosition(bubble, bubbleX, bubbleY);
@@ -77,8 +87,9 @@ function pointAt(target) {
 
   const tipX = r.x + r.w - Math.min(10, r.w * 0.3);
   const tipY = r.y + r.h - Math.min(8, r.h * 0.3);
-  const lefty = { x: tipX - LEFTY_TIP, y: tipY - LEFTY_TIP, w: LEFTY_WIDTH, h: LEFTY_HEIGHT };
+  const lefty = { x: tipX - leftySize.tip, y: tipY - leftySize.tip, w: leftySize.w, h: leftySize.h };
   leftyEl.classList.add('glide', 'pointing');
+  playBody('land'); // grows a little as he lands, so the eye finds him
   bubble.classList.add('glide');
   setPosition(leftyEl, lefty.x, lefty.y);
 
@@ -86,8 +97,8 @@ function pointAt(target) {
   const bh = bubble.offsetHeight || 230;
   const keepClear = { x: r.x - RING_PAD - GAP, y: r.y - RING_PAD - GAP, w: r.w + (RING_PAD + GAP) * 2, h: r.h + (RING_PAD + GAP) * 2 };
   const candidates = [
-    { x: lefty.x + LEFTY_WIDTH + GAP, y: lefty.y - 10 },     // right of Lefty
-    { x: lefty.x - 20, y: lefty.y + LEFTY_HEIGHT + GAP },     // below Lefty
+    { x: lefty.x + leftySize.w + GAP, y: lefty.y - 10 },     // right of Lefty
+    { x: lefty.x - 20, y: lefty.y + leftySize.h + GAP },     // below Lefty
     { x: r.x - bw - GAP * 2, y: r.y },                        // left of the target
     { x: r.x, y: r.y - bh - GAP * 2 },                        // above the target
   ].map((c) => clampToScreen({ ...c, w: bw, h: bh }));
@@ -101,12 +112,20 @@ function stopPointing() {
   leftyEl.classList.remove('glide', 'pointing');
   bubble.classList.remove('glide');
   api.setTarget(null);
+  updateModeChip();
+}
+
+// A short animation of Lefty's body: 'land' (grows as he arrives at a target) or 'press' (a click in Do it mode).
+function playBody(name) {
+  leftyBody.classList.remove('land', 'press');
+  void leftyBody.offsetWidth; // replay it
+  leftyBody.classList.add(name);
 }
 
 // While guiding, the chat bubble steps aside so the screen itself shows the way.
 function tuckBubble(tucked) {
   bubble.classList.toggle('tucked', tucked);
-  if (tucked) api.setInteractive(false); // a hidden bubble must never keep catching the user's clicks
+  reportRegions(); // a hidden bubble must never keep catching the user's clicks
 }
 
 // The step tag rides to the right of Lefty, or below him near the right screen edge.
@@ -115,14 +134,15 @@ function placeStepTag() {
   const leftyY = parseFloat(leftyEl.style.top);
   const w = stepTag.offsetWidth || 120;
   const h = stepTag.offsetHeight || 30;
-  let x = leftyX + LEFTY_WIDTH - 6;
-  let y = leftyY + 34;
+  let x = leftyX + leftySize.w - 4;
+  let y = leftyY + Math.round(leftySize.h * 0.38);
   if (x + w > screenArea.width - GAP) {
     x = leftyX + 10;
-    y = leftyY + LEFTY_HEIGHT + 4;
+    y = leftyY + leftySize.h + 4;
   }
   const box = clampToScreen({ x, y, w, h });
   setPosition(stepTag, box.x, box.y);
+  placeModeChip(box);
 }
 
 function setStepTag(count, text, { done = false } = {}) {
@@ -138,6 +158,7 @@ function setStepTag(count, text, { done = false } = {}) {
   stepTag.classList.toggle('done', done);
   stepTag.classList.add('show', 'glide');
   placeStepTag();
+  updateModeChip();
 }
 
 function nudgeStepTag() {
@@ -147,13 +168,44 @@ function nudgeStepTag() {
   stepTag.dataset.nudges = String(Number(stepTag.dataset.nudges || 0) + 1);
 }
 
-function addMessage(text, from) {
+/* ---------- Chat history ----------
+   What the user and Lefty say is saved as a chat (main's history.js: Supabase or this PC), from the user's first
+   message on, so it can be opened and continued from the home screen. Only the text: never screenshots or audio. */
+let chat = { id: null, ready: null, earlier: [] };
+function newChat() { chat = { id: null, ready: null, earlier: [] }; }
+
+function record(role, text) {
+  if (!text || !api.chatCreate) return;
+  if (!chat.ready) {
+    if (role !== 'user') return; // the greeting before anything was asked is not a chat yet
+    const thisChat = chat;
+    thisChat.ready = api.chatCreate(text).then((r) => { thisChat.id = r && r.ok && r.chat ? r.chat.id : null; return thisChat.id; }).catch(() => null);
+  }
+  chat.ready.then((id) => { if (id) api.chatAdd({ chatId: id, role, text }); });
+  chat.earlier.push(`${role === 'user' ? 'User' : 'Lefty'}: ${String(text).slice(0, 600)}`);
+  if (chat.earlier.length > 12) chat.earlier.shift();
+}
+
+// Lefty's messages are read out too when "Lefty talks" is on (not the greeting: that would talk at every summon).
+// save: kept in the chat history (not the greeting, "listening" notes or messages shown again from the history).
+function addMessage(text, from, { say = true, save = say } = {}) {
   const el = document.createElement('div');
   el.className = `msg ${from === 'lefty' ? 'lefty-msg' : 'user-msg'}`;
   el.textContent = text;
+  if (save) record(from === 'lefty' ? 'lefty' : 'user', text);
   messages.append(el);
   while (messages.children.length > MAX_MESSAGES) messages.firstElementChild.remove();
+  keepBubbleOnScreen();
+  if (from === 'lefty' && say) speak(text);
   return el;
+}
+
+// A bubble that grew (a new message, answer buttons, a name box) moves up if its bottom would leave the screen.
+function keepBubbleOnScreen() {
+  const top = parseFloat(bubble.style.top);
+  const h = bubble.offsetHeight;
+  if (!Number.isFinite(top) || !h || top + h <= screenArea.height - GAP) return;
+  setPosition(bubble, parseFloat(bubble.style.left) || GAP, Math.max(GAP, screenArea.height - h - GAP));
 }
 
 // A question from Lefty with answer buttons; each button runs its pick() once, then all of them go quiet.
@@ -176,12 +228,16 @@ function addChoicesTo(el, choices) {
     row.append(button);
   }
   el.append(row);
+  keepBubbleOnScreen();
   // Where the buttons are, for the log: once the bubble has stopped gliding to its place (0.5 s).
-  setTimeout(() => row.querySelectorAll('button').forEach((b) => {
-    const r = b.getBoundingClientRect();
-    api.log(`choice "${b.textContent}" (${Math.round(r.left + screenArea.originX)},${Math.round(r.top + screenArea.originY)} ${Math.round(r.width)}x${Math.round(r.height)})`);
-  }), 600);
+  setTimeout(() => row.querySelectorAll('button').forEach((b) => api.log(`choice "${b.textContent}" ${whereIs(b)}`)), 600);
   return el;
+}
+
+// "(x,y wxh)" of an element in global DIPs, for the log (live tests click Lefty's own buttons from it).
+function whereIs(el) {
+  const r = el.getBoundingClientRect();
+  return `(${Math.round(r.left + screenArea.originX)},${Math.round(r.top + screenArea.originY)} ${Math.round(r.width)}x${Math.round(r.height)})`;
 }
 
 function showTyping() {
@@ -216,17 +272,26 @@ function cancelJob() {
   watchTimer = null;
   stopGhost();
   clearFix(); // the code doctor's ghost fix
+  updateModeChip();
 }
 
 function reset() {
+  newChat();
+  focusBlock = null;
+  stepTag.classList.remove('wrap');
   cancelJob();
   stopPointing();
   tuckBubble(false);
   stepTag.dataset.nudges = '0';
   hideGuard();
+  hideTip();
+  endPick();
+  stopListening(false);
   lastSeen = []; // a new summon may be over a different app
+  lastSeenApp = { app: '', title: '', private: false };
   messages.replaceChildren();
-  greeting = addMessage("👋 Hi! What's your goal?", 'lefty');
+  clearTimeout(focusNoticeTimer);
+  greeting = addMessage(focusState.on ? `Focus mode: ${focusLeft()} left. What's your goal?` : "Hi! What's your goal?", 'lefty', { say: false });
   input.value = '';
   contextReady = new Promise((resolve) => { resolveContext = resolve; });
 }
@@ -253,17 +318,17 @@ function show(decision) {
   if (!target) { // a step with nothing to point at (a key to press): the tag says it, Lefty stays put
     ring.classList.remove('show', 'hit');
     api.setTarget(null);
-    setStepTag(decision.count || '', decision.label);
+    setStepTag(decision.count || '', tagText(decision));
     api.log(`step ${decision.count || decision.id}: ${decision.label}`);
     return;
   }
   if (!isOnScreen(target.rect)) {
-    stopGuide(`Found "${target.name}", but it's on your other screen. 👀`);
+    stopGuide(`Found "${target.name}", but it's on your other screen.`);
     return;
   }
   pointAt(target);
   api.raise(); // a menu that just opened is drawn above Lefty otherwise
-  setStepTag(decision.count || '', decision.label);
+  setStepTag(decision.count || '', tagText(decision));
   api.setTarget(target.rect);
   api.log(`step ${decision.count || decision.id}: pointing at ${target.type} "${target.name}" (${Math.round(target.rect.x)},${Math.round(target.rect.y)} ${Math.round(target.rect.w)}x${Math.round(target.rect.h)})`);
 }
@@ -274,19 +339,24 @@ function apply(decision, event) {
   const previous = job.decision;
   if (previous && previous.id === decision.id) {
     job.decision = decision;
-    if (!decision.target) return;
-    const moved = !previous.target || !sameRect(previous.target.rect, decision.target.rect);
-    if (moved) show(decision);
-    else api.setTarget(decision.target.rect); // a click on the target clears it in main: keep watching
-    if (event && event.type === 'click' && !event.hit && (moved || !job.hinted)) {
-      job.hinted = true;
-      nudgeStepTag();
+    if (decision.target) {
+      const moved = !previous.target || !sameRect(previous.target.rect, decision.target.rect);
+      if (moved) show(decision);
+      else api.setTarget(decision.target.rect); // a click on the target clears it in main: keep watching
+      if (event && event.type === 'click' && !event.hit && (moved || !job.hinted)) {
+        job.hinted = true;
+        nudgeStepTag();
+      }
     }
+    autoStep(decision);
     return;
   }
   job.decision = decision;
   job.hinted = false;
+  job.yourTurn = null;
   show(decision);
+  speak(decision.label); // each new step, once
+  autoStep(decision);
 }
 
 // The AI is working out the next step: the old ring goes, the tag says Lefty is thinking.
@@ -296,7 +366,7 @@ function showThinking() {
   job.decision = null;
   ring.classList.remove('show', 'hit');
   api.setTarget(null);
-  setStepTag('', job.memory.history && job.memory.history.length ? '🤔 Thinking…' : '🤔 Looking at your screen…');
+  setStepTag('', job.memory.history && job.memory.history.length ? 'Thinking…' : 'Looking at your screen…');
 }
 
 // The goal is about another app ("...in VS Code", asked from the desktop): switch to it if it's open, or ask
@@ -308,18 +378,27 @@ async function openApp(decision) {
   job.decision = decision;
   ring.classList.remove('show', 'hit');
   api.setTarget(null);
-  setStepTag('', `🔎 Looking for ${decision.app}…`);
+  setStepTag('', `Looking for ${decision.app}…`);
   api.log(`step ${decision.id}: open app "${decision.app}"`);
   const found = await api.openApp(decision.app);
   if (job !== thisJob) return;
   if (found.ok) { appOpened(thisJob, decision, found.app); return; }
   if (!found.launchable) {
-    stopGuide(`I can't find ${decision.app} on this PC. 🤔 If it's installed, open it and call me again.`);
+    stopGuide(`I can't find ${decision.app} on this PC. If it's installed, open it and call me again.`);
+    return;
+  }
+  if (autoOn()) { // Do it mode: opening an app is harmless, so Lefty just does it
+    setStepTag('', `Opening ${found.app}…`);
+    api.log(`do it: opening ${found.app}`);
+    const launched = await api.launchApp({ app: found.app, appId: found.appId });
+    if (job !== thisJob) return;
+    if (launched.ok) appOpened(thisJob, decision, launched.app);
+    else stopGuide(`${found.app} didn't open. Try opening it yourself and call me again.`);
     return;
   }
   job.paused = true; // nothing moves on until the user answers
   stepTag.classList.remove('show');
-  addChoices(`${found.app} isn't open. Shall I open it? 🚀`, [
+  addChoices(`${found.app} isn't open. Shall I open it?`, [
     {
       label: `Yes, open ${found.app}`,
       primary: true,
@@ -327,26 +406,326 @@ async function openApp(decision) {
         if (job !== thisJob) return;
         job.paused = false;
         tuckBubble(true);
-        setStepTag('', `🚀 Opening ${found.app}…`);
+        setStepTag('', `Opening ${found.app}…`);
         api.log(`user said yes: opening ${found.app}`);
         const launched = await api.launchApp({ app: found.app, appId: found.appId });
         if (job !== thisJob) return;
         if (launched.ok) appOpened(thisJob, decision, launched.app);
-        else stopGuide(`${found.app} didn't open. 😕 Try opening it yourself and call me again.`);
+        else stopGuide(`${found.app} didn't open. Try opening it yourself and call me again.`);
       },
     },
     {
       label: 'No',
-      pick: () => { if (job === thisJob) stopGuide(`Okay! Open ${found.app} when you're ready and call me again. 👍`); },
+      pick: () => { if (job === thisJob) stopGuide(`Okay! Open ${found.app} when you're ready and call me again.`); },
     },
   ]);
   tuckBubble(false);
 }
 
 function appOpened(thisJob, decision, app) {
-  setStepTag('', `✅ ${app} is in front`);
+  setStepTag('', `${app} is in front`);
   setTimeout(() => { if (job === thisJob) reconsider({ type: 'opened', app, decisionId: decision.id }); }, 600);
 }
+
+/* ---------- Do it mode ----------
+   In Do it mode Lefty makes each move himself: he glides to the target (so the user sees what he's about to do),
+   clicks it, types, presses the keys or scrolls, and the goal loop carries on as if the user had done it. What only
+   the user can decide (a file name, a password) stays theirs: the tag says "Your turn" and Lefty waits. Anything
+   risky (delete, buy, send, install) is asked about first. While he works, Esc, a click or a key from the user stops
+   him (moving the mouse doesn't), and the chat offers Continue. auto.js decides what each step needs. */
+const modeChip = document.getElementById('modechip');
+const AUTO_SHOW_MS = 600;        // the glide to the target, before the click
+const AUTO_IDLE_MS = 1500;       // after the user's own turn, how long they must have stopped before Lefty acts
+const AUTO_MAX_SAME = 3;         // the same click this many times with nothing moving on: it isn't working
+const AUTO_GRACE_MS = 600;       // the key that sent the goal may arrive just after the job starts: not a stop
+const AUTO_MAX_FAILS = 2;        // failed tries at one step before the user is asked to do it
+let settings = { mode: 'learn', size: 'normal', speak: 'off', privateApps: [] };
+let lastUserInputAt = 0;
+
+const autoOn = () => settings.mode === 'auto';
+// Lefty is working for the user right now (thinking or acting): their input means "stop". Once a step was handed to
+// the user, their input is theirs (typing a file name moves the guide on after the first letter) until Lefty acts again.
+const autoWorking = () => Boolean(job) && autoOn() && !job.paused && !job.yourTurn && !job.handedOver && !job.ghost;
+
+const YOUR_TURN = {
+  choice: 'Your turn: ',
+  private: 'Your turn: ',
+  nothing: 'Your turn: ',
+  cant: "I couldn't do this one: ",
+  stuck: 'Your turn: ',
+};
+
+// What the step tag says: the step, plus who does it in Do it mode.
+function tagText(decision) {
+  if (!autoOn() || !job) return decision.label;
+  const label = LeftyAuto.stripEmoji(decision.label) || decision.label;
+  if (job.yourTurn === decision.id) return `${YOUR_TURN[job.yourTurnWhy] || YOUR_TURN.nothing}${label}`;
+  return label;
+}
+
+function applySettings(next) {
+  const before = settings.mode;
+  settings = { ...settings, ...next };
+  const w = SIZES[settings.size] || SIZES.normal;
+  Object.assign(leftySize, { w, h: Math.round((w * 104) / 74), tip: Math.round((w * 6) / 74) });
+  leftyEl.style.width = `${w}px`;
+  document.querySelectorAll('#mode button').forEach((b) => {
+    const on = b.dataset.mode === settings.mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+  const talking = settings.speak === 'on';
+  speakButton.innerHTML = talking ? ICONS.speakerOn : ICONS.speakerOff;
+  speakButton.setAttribute('aria-pressed', String(talking));
+  speakButton.title = talking ? 'Lefty talks: on' : 'Lefty talks: off';
+  if (!talking) hush();
+  if (job && settings.mode !== before) {
+    api.log(`mode: ${settings.mode === 'auto' ? 'Do it' : 'Learn'}${job.decision ? ` during ${job.decision.id}` : ''}`);
+    job.yourTurn = null;
+    job.okFor = null;
+    if (job.decision && !job.paused && (job.decision.target || job.decision.kind === 'tell')) {
+      setStepTag(job.decision.count || '', tagText(job.decision));
+      autoStep(job.decision);
+    }
+  }
+  updateModeChip();
+}
+
+api.getSettings().then(applySettings).catch(() => {});
+api.onSettings(applySettings);
+// After a switch in the bubble the keyboard goes back to the goal box (typing would otherwise press the switch again).
+document.querySelectorAll('#mode button').forEach((b) => {
+  b.addEventListener('click', () => { api.setSettings({ mode: b.dataset.mode }); input.focus(); });
+});
+speakButton.addEventListener('click', () => { api.setSettings({ speak: settings.speak === 'on' ? 'off' : 'on' }); input.focus(); });
+
+// The chip beside the step tag: "Do it for me" in Learn mode, "Stop" while Lefty works.
+function updateModeChip() {
+  const showing = Boolean(job) && !job.paused && !job.ghost && !job.doctor && !job.coding && stepTag.classList.contains('show') && !stepTag.classList.contains('done');
+  modeChip.classList.toggle('show', showing);
+  if (!showing) return;
+  const auto = autoOn();
+  modeChip.textContent = auto ? '■ Stop (Esc)' : 'Do it for me';
+  modeChip.classList.toggle('stop', auto);
+  placeModeChip();
+}
+
+function placeModeChip(tagBox) {
+  if (!modeChip.classList.contains('show')) return;
+  const tag = tagBox || { x: parseFloat(stepTag.style.left), y: parseFloat(stepTag.style.top), w: stepTag.offsetWidth, h: stepTag.offsetHeight };
+  const w = modeChip.offsetWidth || 110;
+  const h = modeChip.offsetHeight || 26;
+  let x = tag.x + tag.w + 6;
+  let y = tag.y + (tag.h - h) / 2;
+  if (x + w > screenArea.width - GAP) { x = tag.x; y = tag.y + tag.h + 6; } // no room on the right: below the tag
+  const box = clampToScreen({ x, y, w, h });
+  setPosition(modeChip, box.x, box.y);
+}
+
+modeChip.addEventListener('click', () => {
+  if (!job) return;
+  if (autoOn()) stopAuto('button');
+  else api.setSettings({ mode: 'auto' });
+});
+
+// The step stays the user's: what to type is their choice, it's private, or Lefty can't do it himself.
+function yourTurn(decision, why) {
+  if (job.yourTurn === decision.id && job.yourTurnWhy === why) return;
+  job.yourTurn = decision.id;
+  job.yourTurnWhy = why;
+  job.handedOver = true;
+  api.log(`do it: your turn (${why}) for ${decision.id}`);
+  setStepTag(decision.count || '', tagText(decision));
+  speak(tagText(decision));
+}
+
+// The name Lefty expects under the point before he clicks: a real button's name. Guessed spots, areas and boxes worked
+// out from their neighbours have no name Windows knows.
+const expectName = (target) => (target.type === 'Spot' || target.type === 'Area' || target.guessed ? '' : String(target.name || '').trim());
+const centre = (rect) => ({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
+
+async function autoStep(decision) {
+  if (!autoOn() || !job || job.paused || job.autoBusy) return;
+  if (['open', 'code', 'doctor', 'focus', 'build'].includes(decision.kind)) return; // act() handles these
+  const plan = LeftyAuto.plan(decision);
+  if (plan.yourTurn) { yourTurn(decision, plan.yourTurn); return; }
+  if (job.yourTurn === decision.id) return; // handed to the user earlier (failed tries, or they chose to do it)
+  if (job.acted === decision.id) return;    // done; waiting for the screen to move on
+  const thisJob = job;
+  const still = () => job === thisJob && !job.paused && autoOn() && job.decision && job.decision.id === decision.id;
+  job.autoBusy = true;
+  try {
+    await sleep(AUTO_SHOW_MS);
+    while (still() && Date.now() - lastUserInputAt < AUTO_IDLE_MS) await sleep(200); // the user is still at it
+    if (!still()) return;
+    const current = job.decision; // the latest read of the same step (its target may have moved)
+    if (current.target && current.target.type === 'Spot' && (plan.act === 'click' || plan.act === 'type')) {
+      const under = await api.autoPeek(current.target.rect);
+      if (!still()) return;
+      if (!LeftyAuto.spotOk(current.label, under)) {
+        api.log(`do it: the guessed spot for ${current.id} is on ${under.type} "${under.name}", not what the step names`);
+        yourTurn(current, 'cant');
+        return;
+      }
+    }
+    if (plan.ask && job.okFor !== decision.id) { askFirst(thisJob, current, plan); return; }
+    if (plan.act !== 'skip') { // the same move again and again (a click that does nothing): hand it over
+      const t = current.target;
+      const key = t ? `${plan.act}|${t.type}|${t.name}|${Math.round(t.rect.x)},${Math.round(t.rect.y)}` : `${plan.act}|${plan.combo || plan.text || ''}`;
+      job.sameCount = job.lastAutoKey === key ? (job.sameCount || 0) + 1 : 1;
+      job.lastAutoKey = key;
+      if (job.sameCount > AUTO_MAX_SAME) { yourTurn(current, 'stuck'); return; }
+    }
+    await perform(thisJob, current, plan);
+  } finally {
+    if (job === thisJob) job.autoBusy = false;
+  }
+}
+
+async function perform(thisJob, decision, plan) {
+  const t = decision.target;
+  api.log(`do it: ${plan.act} for ${decision.id}${t ? ` on ${t.type} "${t.name}"` : ''}`);
+  job.handedOver = false; // Lefty is working again: from now on the user's input stops him
+  if (plan.act === 'skip') { // "Pick any folder": the one the dialog shows is fine
+    job.acted = decision.id;
+    reconsider({ type: 'click', hit: true, auto: true, decisionId: decision.id, element: null, elements: lastSeen, point: null });
+    return;
+  }
+  playBody('press');
+  let result;
+  if (plan.act === 'click') {
+    api.setTarget(null); // Lefty's own click is not the user's
+    result = await api.autoClick({ rect: t.rect, button: plan.button, count: plan.count, expect: expectName(t) });
+  } else if (plan.act === 'type') {
+    result = plan.click ? await api.autoClick({ rect: t.rect, button: 'left', count: 1, expect: expectName(t) }) : { ok: true };
+    if (result.ok && job === thisJob && !job.paused) {
+      await sleep(120); // the box takes the keyboard
+      result = await api.autoType(plan.text);
+    }
+  } else if (plan.act === 'keys') {
+    result = await api.autoKeys(plan.keys);
+  } else if (plan.act === 'scroll') {
+    result = await api.autoScroll({ rect: t.rect, notches: plan.notches });
+  } else {
+    return;
+  }
+  if (job !== thisJob) return;
+  if (!result.ok) { autoFailed(decision, result.error); return; }
+  job.acted = decision.id;
+  job.autoFails = 0;
+  if (t) ring.classList.add('hit');
+  if (job.paused) return; // stopped while acting: the step is done, the rest waits for Continue
+  if (plan.act === 'click') {
+    reconsider({ type: 'click', hit: true, auto: true, point: centre(t.rect), element: t, elements: lastSeen, decisionId: decision.id, targetName: t.name });
+  } else if (plan.act === 'keys') {
+    reconsider({ type: 'key', combo: plan.combo, auto: true, decisionId: decision.id });
+  } else {
+    reconsider({ type: 'acted', auto: true, decisionId: decision.id });
+  }
+}
+
+function autoFailed(decision, error) {
+  api.log(`do it: ${decision.id} failed (${error})`);
+  if (error === 'covered') { stopAuto('covered', "Another window is in the way, so I stopped."); return; }
+  if (error === 'not-front' || error === 'no-window') { stopAuto('not-front', "I couldn't get to the app, so I stopped."); return; }
+  if (error === 'password') { yourTurn(decision, 'private'); return; }
+  job.autoFails = (job.autoFails || 0) + 1;
+  if (job.autoFails >= AUTO_MAX_FAILS) { yourTurn(decision, 'cant'); return; }
+  reconsider(null); // the screen moved on (or the target moved): look again
+}
+
+// Risky steps wait for a yes. The ring stays on what Lefty would click.
+function askFirst(thisJob, decision, plan) {
+  job.paused = true;
+  updateModeChip();
+  api.log(`do it: asking first (${plan.ask})`);
+  addChoices(`${plan.ask}. Shall I do it?`, [
+    {
+      label: 'Yes, do it',
+      primary: true,
+      pick: () => {
+        if (job !== thisJob) return;
+        job.paused = false;
+        job.okFor = decision.id;
+        tuckBubble(true);
+        api.log('do it: the user said yes');
+        autoStep(job.decision && job.decision.id === decision.id ? job.decision : decision);
+      },
+    },
+    {
+      label: "I'll do it",
+      pick: () => {
+        if (job !== thisJob) return;
+        job.paused = false;
+        tuckBubble(true);
+        yourTurn(decision, 'choice');
+        api.focusApp();
+      },
+    },
+    { label: 'Stop', pick: () => { if (job === thisJob) stopGuide("Okay, I stopped there."); } },
+  ]);
+  tuckBubble(false);
+}
+
+// Esc, the Stop chip, or the user's own click or key while Lefty works: he stops and offers to go on.
+function stopAuto(why, message) {
+  if (!job || job.paused) return;
+  const thisJob = job;
+  job.paused = true;
+  lookToken += 1; // a look already on its way must not act any more
+  looking = false;
+  ring.classList.remove('show', 'hit');
+  stepTag.classList.remove('show', 'glide');
+  api.setTarget(null);
+  updateModeChip();
+  api.log(`do it: stopped (${why})`);
+  const said = message || (why === 'esc' || why === 'button' ? 'Stopped.' : 'You took over, so I stopped.');
+  addChoices(`${said} Carry on yourself, or let me continue.`, [
+    { label: 'Continue', primary: true, pick: () => resumeAuto(thisJob, 'auto') },
+    { label: 'Guide me instead', pick: () => resumeAuto(thisJob, 'learn') },
+  ]);
+  tuckBubble(false);
+}
+
+function resumeAuto(thisJob, mode) {
+  if (job !== thisJob) return;
+  api.log(`do it: ${mode === 'auto' ? 'continuing' : 'guiding instead'}`);
+  if (mode !== settings.mode) {
+    settings.mode = mode; // at once, so the next decision is made in the new mode; main confirms and saves it
+    api.setSettings({ mode });
+  }
+  Object.assign(job, { paused: false, acted: null, autoFails: 0, yourTurn: null, handedOver: false, okFor: null, decision: null, sameCount: 0 });
+  tuckBubble(true);
+  api.focusApp();
+  if (job.doctor) { autoDoctor(thisJob); return; }
+  reconsider({ type: 'resumed' });
+}
+
+// Do it mode for code: Lefty writes it into VS Code himself instead of drawing it to type over.
+async function writeCode(decision) {
+  if (job.coding === decision.id) return;
+  const thisJob = job;
+  job.coding = decision.id;
+  job.decision = decision;
+  ring.classList.remove('show', 'hit', 'error');
+  api.setTarget(null);
+  retreatToCorner();
+  setStepTag('', 'Writing the code…');
+  playBody('press');
+  const result = await api.autoCode(decision.code);
+  if (job !== thisJob) return;
+  if (!result.ok && result.error === 'not-editor') { codeInChat(decision.code, "Here's the code. (I can write it in for you in VS Code.)"); return; }
+  if (!result.ok) { stopGuide("I couldn't write into your editor. Click into your code and ask me again."); return; }
+  finish({ done: true, message: 'Done! I wrote the code for you. Run it to see it work.' });
+}
+
+// Main says the user clicked, turned the wheel or pressed a key (not which key, except Esc).
+api.onInput(({ kind, escape }) => {
+  if (kind === 'key' && document.hasFocus()) return; // typed into Lefty's own chat box, not the app
+  lastUserInputAt = Date.now();
+  if (!autoWorking() || Date.now() - job.startedAt < AUTO_GRACE_MS) return;
+  stopAuto(escape ? 'esc' : kind);
+});
 
 /* ---------- Ghost code ----------
    "Write a linked list" in VS Code: the brain writes the code and Lefty draws it as faint text at the user's text
@@ -361,7 +740,7 @@ let measureCanvas = null;
 
 // options.gap: lines left free above the code before typing starts (1 for new code, 0 to retype a line in place);
 // options.onDone: what happens when it's all typed (default: the goal is done).
-function startGhost(decision, { gap = 1, onDone = null, tag = '👻 Press Enter, then type along' } = {}) {
+function startGhost(decision, { gap = 1, onDone = null, tag = 'Press Enter, then type along' } = {}) {
   if (job.ghost && job.ghost.id === decision.id) return; // the same step decided again
   job.decision = decision;
   job.ghost = { id: decision.id, code: decision.code, tracker: LeftyGhost.track(decision.code, { gap }), font: null, row: -1, since: Date.now(), onDone };
@@ -477,12 +856,13 @@ function finishGhost(g) {
    shows as ghost text beside it, and the chat offers "Fix it for me" (Lefty pastes the fix), "I'll type it" (the
    line is cleared and the fix becomes ghost code to type over) or "Skip". */
 const DOCTOR_PROBLEMS = {
-  'not-editor': "I can check code in VS Code (or Cursor). Open your file there and ask me again. 🩺",
-  'not-front': "I couldn't get to your editor. Click into your code and ask me again. 👆",
-  'no-cursor': 'Click into your code first, then ask me again. 👆',
-  secret: "That file looks like it holds secrets (keys, passwords), so I won't read it. 🔒",
-  'no-copy': "I couldn't read your code. Click into the file and ask me again. 😕",
-  failed: "I couldn't read your code. Click into the file and ask me again. 😕",
+  'not-editor': "I can check code in VS Code (or Cursor). Open your file there and ask me again.",
+  'not-front': "I couldn't get to your editor. Click into your code and ask me again.",
+  'no-cursor': 'Click into your code first, then ask me again.',
+  secret: "That file looks like it holds secrets (keys, passwords), so I won't read it.",
+  'no-copy': "I couldn't read your code. Click into the file and ask me again.",
+  failed: "I couldn't read your code. Click into the file and ask me again.",
+  private: "This editor is on your private list, so I won't send its code anywhere. (Change that on my home screen.)",
 };
 const indentOf = (line) => line.length - line.trimStart().length;
 
@@ -494,16 +874,16 @@ async function startDoctor(goal) {
   ring.classList.remove('show', 'hit', 'error');
   api.setTarget(null);
   tuckBubble(true);
-  setStepTag('', '🩺 Reading your code…');
+  setStepTag('', 'Reading your code…');
   const read = await api.doctorRead();
   if (job !== thisJob) return;
   if (!read.ok) { stopGuide(DOCTOR_PROBLEMS[read.error] || DOCTOR_PROBLEMS.failed); return; }
-  if (!read.code.trim()) { stopGuide('Your file is empty, so nothing can be wrong yet! ✍️'); return; }
-  setStepTag('', `🩺 Checking ${read.fileName || 'your code'}…`);
+  if (!read.code.trim()) { stopGuide('Your file is empty, so nothing can be wrong yet!'); return; }
+  setStepTag('', `Checking ${read.fileName || 'your code'}…`);
   const result = await api.doctorCheck({ code: read.code, fileName: read.fileName, goal, hint: read.hint });
   if (job !== thisJob) return;
   if (!result.ok) { stopGuide(result.error); return; }
-  if (!result.problems.length) { stopGuide(`✅ ${result.summary || "I don't see any errors in your code."}`); return; }
+  if (!result.problems.length) { stopGuide(result.summary || "I don't see any errors in your code."); return; }
   Object.assign(job.doctor, { lines: read.code.split('\n'), problems: result.problems, fileName: read.fileName });
   api.log(`doctor: ${result.problems.length} problem(s) in ${read.fileName || 'the file'}`);
   showProblem(thisJob);
@@ -514,10 +894,10 @@ async function showProblem(thisJob) {
   const p = d.problems[d.i];
   if (!p) { doctorDone(); return; }
   const count = `${d.i + 1}/${d.problems.length}`;
-  setStepTag(count, `🔎 Going to line ${p.line}…`);
+  setStepTag(count, `Going to line ${p.line}…`);
   const at = await api.doctorGoto({ line: p.line, col: 1 });
   if (job !== thisJob) return;
-  if (!at.ok) { stopGuide(`I couldn't get to line ${p.line}. 😕 Click into your code and ask me again.`); return; }
+  if (!at.ok) { stopGuide(`I couldn't get to line ${p.line}. Click into your code and ask me again.`); return; }
   if (!d.metrics) d.metrics = measureFont(await api.editorFont(at.process), at.line);
   if (job !== thisJob) return;
   const { charWidth } = d.metrics;
@@ -530,24 +910,41 @@ async function showProblem(thisJob) {
     w: Math.max(2, longest - indent) * charWidth + 8, h: at.line.h * wrong.length + 2,
   };
   drawFix(at, d.metrics, longest + 3, p.fixed);
-  const el = addMessage(`❌ Line ${p.line}: ${p.message}`, 'lefty');
+  const el = addMessage(`Line ${p.line}: ${p.message}`, 'lefty');
   el.classList.add('has-code');
   const pre = document.createElement('pre');
   pre.className = 'code';
   pre.textContent = p.fixed;
   el.append(pre);
-  addChoicesTo(el, [
-    { label: '✨ Fix it for me', primary: true, pick: () => doctorFix(thisJob, p) },
-    { label: "✍️ I'll type it", pick: () => doctorRetype(thisJob, p) },
-    { label: 'Skip', pick: () => doctorNext(thisJob) },
+  const choices = addChoicesTo(el, [
+    { label: 'Fix it for me', primary: true, pick: () => { p.picked = true; doctorFix(thisJob, p); } },
+    { label: "I'll type it", pick: () => { p.picked = true; doctorRetype(thisJob, p); } },
+    { label: 'Skip', pick: () => { p.picked = true; doctorNext(thisJob); } },
   ]);
+  d.choices = choices;
   tuckBubble(false);
   pointAt({ rect });
   bubbleClearOfRow(rect); // the fix is drawn beside the wrong line: the chat keeps off that row
   ring.classList.add('error');
   api.raise();
-  setStepTag(count, `❌ ${p.message}`);
+  setStepTag(count, `${p.message}`);
   api.log(`doctor: showing line ${p.line}${p.endLine > p.line ? `-${p.endLine}` : ''} (${Math.round(rect.x)},${Math.round(rect.y)} ${Math.round(rect.w)}x${Math.round(rect.h)})`);
+  autoDoctor(thisJob);
+}
+
+// Do it mode: each error is shown for a moment (so the user sees what changes), then Lefty fixes it himself.
+const AUTO_DOCTOR_SHOW_MS = 1400;
+function autoDoctor(thisJob) {
+  const d = job.doctor;
+  const p = d.problems[d.i];
+  if (!autoOn() || !p || p.picked) return;
+  setTimeout(() => {
+    if (job !== thisJob || job.paused || !autoOn() || p.picked || d.problems[d.i] !== p) return;
+    p.picked = true;
+    if (d.choices) d.choices.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    api.log(`do it: fixing line ${p.line}`);
+    doctorFix(thisJob, p);
+  }, AUTO_DOCTOR_SHOW_MS);
 }
 
 // The chat at the right edge of the screen, below the wrong code's row (or above it near the bottom), so neither
@@ -598,14 +995,14 @@ async function doctorFix(thisJob, p) {
   if (job !== thisJob) return;
   tuckBubble(true);
   clearFix();
-  setStepTag(`${job.doctor.i + 1}/${job.doctor.problems.length}`, '✨ Fixing it…');
+  setStepTag(`${job.doctor.i + 1}/${job.doctor.problems.length}`, 'Fixing it…');
   const result = await api.doctorFix({ line: p.line, endLine: p.endLine, text: p.fixed });
   if (job !== thisJob) return;
-  if (!result.ok) { stopGuide("I couldn't change your code. 😕 Click into the file and try again, or type the fix yourself."); return; }
+  if (!result.ok) { stopGuide("I couldn't change your code. Click into the file and try again, or type the fix yourself."); return; }
   applyFixLocally(job.doctor, p);
   ring.classList.remove('error');
   ring.classList.add('hit');
-  setStepTag(`${job.doctor.i + 1}/${job.doctor.problems.length}`, '✅ Fixed!', { done: true });
+  setStepTag(`${job.doctor.i + 1}/${job.doctor.problems.length}`, 'Fixed!', { done: true });
   setTimeout(() => doctorNext(thisJob), 1000);
 }
 
@@ -618,15 +1015,15 @@ async function doctorRetype(thisJob, p) {
   const indent = lines[0].slice(0, indentOf(lines[0]));
   const result = await api.doctorFix({ line: p.line, endLine: p.endLine, text: indent });
   if (job !== thisJob) return;
-  if (!result.ok) { stopGuide("I couldn't get your code ready. 😕 Click into the file and try again."); return; }
+  if (!result.ok) { stopGuide("I couldn't get your code ready. Click into the file and try again."); return; }
   const code = lines.map((l) => (l.startsWith(indent) ? l.slice(indent.length) : l.trimStart())).join('\n');
   startGhost({ id: `doctor:${p.line}`, code }, {
     gap: 0,
-    tag: '✍️ Type the fix',
+    tag: 'Type the fix',
     onDone: () => {
       if (job !== thisJob) return;
       applyFixLocally(job.doctor, p);
-      setStepTag(`${job.doctor.i + 1}/${job.doctor.problems.length}`, '✅ Nice, fixed!', { done: true });
+      setStepTag(`${job.doctor.i + 1}/${job.doctor.problems.length}`, 'Nice, fixed!', { done: true });
       setTimeout(() => doctorNext(thisJob), 1000);
     },
   });
@@ -643,8 +1040,8 @@ function doctorNext(thisJob) {
 function doctorDone() {
   const d = job.doctor;
   const n = d.problems.length;
-  const message = d.fixed === n ? `🎉 All ${n === 1 ? 'fixed' : `${n} fixed`}! Run your code to see it work.`
-    : d.fixed ? `👍 Fixed ${d.fixed} of ${n}. The rest is up to you!` : `👍 That's all ${n === 1 ? 'of it' : n}. Fix them whenever you're ready.`;
+  const message = d.fixed === n ? `All ${n === 1 ? 'fixed' : `${n} fixed`}! Run your code to see it work.${autoOn() ? ' (Ctrl+Z undoes a fix.)' : ''}`
+    : d.fixed ? `Fixed ${d.fixed} of ${n}. The rest is up to you!` : `That's all ${n === 1 ? 'of it' : n}. Fix them whenever you're ready.`;
   api.log(`doctor: done, ${d.fixed} of ${n} fixed`);
   stopGuide(message);
   retreatToCorner();
@@ -656,12 +1053,12 @@ api.onCaret(async (caret) => {
   const editor = String(caret.process || '').toLowerCase();
   if (!GHOST_EDITORS.has(editor)) {
     api.log(`ghost: ${caret.process} is not an editor Lefty can follow; code goes in the chat`);
-    codeInChat(g.code, "Here's the code to type. ✍️ (I can draw it right at your cursor in VS Code.)");
+    codeInChat(g.code, "Here's the code to type. (I can draw it right at your cursor in VS Code.)");
     return;
   }
-  if (!caret.line) { ghostEl.classList.remove('show'); setStepTag('', '👻 Click in your code file'); return; } // focus is in a side panel
+  if (!caret.line) { ghostEl.classList.remove('show'); setStepTag('', 'Click in your code file'); return; } // focus is in a side panel
   if (!caret.ln) {
-    if (Date.now() - g.since > NO_LN_COL_MS) codeInChat(g.code, "Here's the code to type. ✍️ (Show the Ln/Col in VS Code's status bar and I can draw it at your cursor.)");
+    if (Date.now() - g.since > NO_LN_COL_MS) codeInChat(g.code, "Here's the code to type. (Show the Ln/Col in VS Code's status bar and I can draw it at your cursor.)");
     return;
   }
   if (!g.font) {
@@ -677,7 +1074,7 @@ api.onCaret(async (caret) => {
   drawGhost(g, view, caret);
   if (g.tracker.locked && view.row !== g.row) {
     g.row = view.row;
-    setStepTag(`${view.row + 1}/${view.total}`, '👻 Type along');
+    setStepTag(`${view.row + 1}/${view.total}`, 'Type along');
   }
 });
 
@@ -688,15 +1085,17 @@ function act(decision, event) {
   if (decision.say) { api.log(`said: ${decision.say}`); stopGuide(decision.say); return true; }
   if (decision.thinking) { showThinking(); return true; }
   if (decision.kind === 'open') { job.thinking = false; openApp(decision); return true; }
-  if (decision.kind === 'code') { job.thinking = false; startGhost(decision); return true; }
+  if (decision.kind === 'code') { job.thinking = false; if (autoOn()) writeCode(decision); else startGhost(decision); return true; }
   if (decision.kind === 'doctor') { startDoctor(job.goal); return true; }
+  if (decision.kind === 'focus') { startFocus(decision); return true; }
+  if (decision.kind === 'build') { startBuild(decision); return true; }
   if (decision.target || decision.kind === 'tell') { job.thinking = false; apply(decision, event); return true; }
   return false;
 }
 
 // After the user did something: look again (a few times, the screen may still be changing) and decide.
 async function reconsider(event) {
-  if (!job || job.paused || job.ghost || job.doctor) return; // waiting for the user's answer, typing ghost code, or the code doctor
+  if (!job || job.paused || job.ghost || job.doctor || job.coding) return; // waiting for the user's answer, ghost code, the code doctor, or writing code
   const thisJob = job;
   if (event) LeftySkills.noteEvent(job, event);
   const look = ++lookToken;
@@ -714,7 +1113,7 @@ async function reconsider(event) {
       if (act(decision, event)) return;
       if (decision.stuck) stuck = decision.stuck;
     }
-    stopGuide(stuck || "I lost track of the screen. Call me again when you're ready. 👀");
+    stopGuide(stuck || "I lost track of the screen. Call me again when you're ready.");
   } finally {
     if (look === lookToken) looking = false;
   }
@@ -722,7 +1121,7 @@ async function reconsider(event) {
 
 // Between the user's actions: progress made from the keyboard (Enter in a dialog, shortcuts) still counts.
 async function watch() {
-  if (!job || looking || job.paused || job.ghost || job.doctor) return; // ghost code follows the cursor instead (onCaret)
+  if (!job || looking || job.paused || job.ghost || job.doctor || job.coding || job.autoBusy) return; // ghost code follows the cursor instead (onCaret)
   const thisJob = job;
   const seen = await api.rescan({ quiet: true });
   rememberSeen(seen);
@@ -735,16 +1134,16 @@ function finish(decision) {
   cancelJob();
   api.setTarget(null);
   if (decision.cancelled) {
-    stopGuide('Okay, cancelled. 👍 What next?');
+    stopGuide('Okay, cancelled. What next?');
     return;
   }
-  const done = decision.message || '🎉 Done!';
+  const done = decision.message || 'Done!';
   setStepTag('', done, { done: true });
   const token = lookToken;
   setTimeout(() => { // let the green tag show first, then Lefty steps out of the way, ready for the next goal
     if (token !== lookToken) return;
     stopPointing();
-    addMessage(decision.message ? `${done} What next?` : `${done} You did it. What next?`, 'lefty'); // before placing, so the bubble is measured at its new height
+    addMessage((decision.message || autoOn()) ? `${done} What next?` : `${done} You did it. What next?`, 'lefty'); // before placing, so the bubble is measured at its new height
     retreatToCorner();
     tuckBubble(false);
   }, 1200);
@@ -752,8 +1151,8 @@ function finish(decision) {
 
 // After a goal Lefty moves to the bottom-right corner, so his chat never covers the user's work.
 function retreatToCorner() {
-  const x = screenArea.width - LEFTY_WIDTH - GAP * 3;
-  const y = screenArea.height - LEFTY_HEIGHT - GAP * 5;
+  const x = screenArea.width - leftySize.w - GAP * 3;
+  const y = screenArea.height - leftySize.h - GAP * 5;
   leftyEl.classList.add('glide');
   bubble.classList.add('glide');
   place({ x: x - 12, y: y - 12, width: screenArea.width, height: screenArea.height });
@@ -767,20 +1166,55 @@ const asSeen = (seen) => (seen && seen.ok ? seen : { ok: true, unread: true, ele
 const isCodeEditor = (seen) => Boolean(seen && seen.ok) && (/^(VS Code|Cursor|Windsurf|VSCodium)$/.test(seen.app || '')
   || / - (Visual Studio Code|Cursor|Windsurf|VSCodium)$/.test(seen.title || ''));
 
-const NO_KEY_HINT ='Get a free key at aistudio.google.com/apikey and put GEMINI_API_KEY=your-key in a .env file in the Lefty folder.';
+// The AI is told the mode, so in Do it mode it says exactly what to type. It says which language the user speaks,
+// which Lefty's voice and his explanations follow.
+let lastLang = '';
+async function think(request) {
+  const answer = await api.think({ ...request, auto: autoOn(), earlier: chat.earlier.slice(0, -1) });
+  if (answer && answer.ok && answer.lang) lastLang = answer.lang;
+  return answer;
+}
+
+// A job for this skill on the screen as seen: the goal loop takes it from here.
+function beginJob(skill, goal) {
+  const thisJob = { skill, goal, memory: {}, decision: null, hinted: false, startedAt: Date.now() };
+  thisJob.memory.wake = () => { if (job === thisJob) watch(); };
+  job = thisJob;
+  return thisJob;
+}
+
+// The first decision is shown and Lefty watches from then on (nothing to show yet: he looks again).
+function runJob(first) {
+  if (!act(first, null)) {
+    if (first.stuck || first.giveUp) { stopGuide(first.stuck || first.giveUp); return; }
+    reconsider(null);
+  }
+  if (!job) return;
+  tuckBubble(true);
+  api.focusApp(); // the next move is in the app: many apps ignore the first click while inactive
+  watchTimer = setInterval(watch, WATCH_EVERY_MS);
+}
+
+// The installed app reads %APPDATA%\lefty\.env (run from the code, the .env next to package.json works too).
+const NO_KEY_HINT = 'Get a free key at aistudio.google.com/apikey and put GEMINI_API_KEY=your-key in a .env file in %APPDATA%\\lefty, then ask again.';
 
 async function ask(goal) {
   addMessage(goal, 'user');
   input.value = '';
   cancelJob();
   stopPointing();
+  hideTip();
   tuckBubble(false); // replies show in the chat; it tucks away again only if a guide starts
   const token = lookToken;
+
+  // "Focus 30 minutes on Chrome": handled here, no brain needed.
+  const focusAsk = LeftyFocus.parse(goal);
+  if (focusAsk) { startFocus(focusAsk.stop ? { minutes: 0 } : focusAsk); return; }
 
   const brainOn = await api.brainReady();
   if (token !== lookToken) return;
   if (LeftyMatch.isStuck(goal) && !brainOn) {
-    addMessage(`My brain isn't connected yet. 🧠 ${NO_KEY_HINT} For now, try "save this", or a path like File > Save as.`, 'lefty');
+    addMessage(`The AI isn't connected yet. ${NO_KEY_HINT} For now, try "save this", or a path like File > Save as.`, 'lefty');
     return;
   }
   const steps = LeftyMatch.parsePlan(goal);
@@ -792,7 +1226,7 @@ async function ask(goal) {
   if (token !== lookToken) return; // Lefty was closed, or asked something else, meanwhile
 
   if (!seen.ok && !brainOn) {
-    addMessage("I couldn't read this app's buttons, sorry. 😕 Try clicking into the app and calling me again.", 'lefty');
+    addMessage("I couldn't read this app's buttons, sorry. Try clicking into the app and calling me again.", 'lefty');
     return;
   }
   const unreadable = !seen.ok; // the brain still sees the screenshot, so it can guide anyway
@@ -800,14 +1234,12 @@ async function ask(goal) {
   // Free and instant first: saving, a typed path, or a short button name found on screen. Anything else
   // (a question, a task in words, or a button that isn't there) goes to the brain.
   const startJob = (skill, { decide = true } = {}) => {
-    const thisJob = { skill, goal, memory: {}, decision: null, hinted: false };
-    thisJob.memory.wake = () => { if (job === thisJob) watch(); };
-    job = thisJob;
+    beginJob(skill, goal);
     return decide ? LeftySkills.decide(job, seen) : null;
   };
   // "Find the error" in a code editor: straight to the code doctor, no first trip to the brain.
   if (brainOn && !unreadable && isCodeEditor(seen) && LeftySkills.isCodeCheckGoal(goal)) {
-    startJob(LeftySkills.aiSkill(goal, (request) => api.think(request)), { decide: false });
+    startJob(LeftySkills.aiSkill(goal, think), { decide: false });
     startDoctor(goal);
     return;
   }
@@ -817,21 +1249,43 @@ async function ask(goal) {
     first = startJob(steps.length === 1 && LeftySkills.isSaveGoal(goal) ? LeftySkills.saveSkill(goal) : LeftySkills.pathSkill(steps));
     if (!first.target && brainOn && steps.length === 1) first = null; // not found the simple way: ask the brain
   }
-  if (!first) first = startJob(LeftySkills.aiSkill(goal, (request) => api.think(request)));
+  if (!first) first = startJob(LeftySkills.aiSkill(goal, think));
   if (!first.target && !first.thinking && first.kind !== 'tell') {
     const notFound = job.skill.name === 'path'
       ? (steps.length === 1
-        ? `I can't spot "${goal}" on this screen. 🤔 ${brainOn ? '' : `Connect my brain and I'll plan every step for you. 🧠 ${NO_KEY_HINT}`}`
-        : `I can't spot "${steps[0]}" on this screen. 🤔`)
-      : (first.giveUp || first.stuck || "I can't see how to do that here yet. 🤔");
+        ? `I can't spot "${goal}" on this screen. ${brainOn ? '' : `Connect the AI and I'll plan every step for you. ${NO_KEY_HINT}`}`
+        : `I can't spot "${steps[0]}" on this screen.`)
+      : (first.giveUp || first.stuck || "I can't see how to do that here yet.");
     stopGuide(notFound.trim());
     return;
   }
-  act(first, null);
-  if (!job) return;
-  tuckBubble(true);
-  api.focusApp(); // the next move is in the app: many apps ignore the first click while inactive
-  watchTimer = setInterval(watch, WATCH_EVERY_MS);
+  runJob(first);
+}
+
+// A goal said out loud: the recording goes to the brain with the screen, which says what it heard (shown in the
+// chat in place of "…") and the first step, in the language it was said in.
+async function askVoice(audio) {
+  const said = addMessage('Voice request…', 'user');
+  input.value = '';
+  cancelJob();
+  stopPointing();
+  hideTip();
+  tuckBubble(false);
+  const token = lookToken;
+  const typing = showTyping();
+  const seen = asSeen(await contextReady);
+  typing.remove();
+  if (token !== lookToken) return;
+  const thisJob = beginJob(null, '');
+  thisJob.skill = LeftySkills.aiSkill('', think, {
+    audio,
+    onHeard: (words) => {
+      said.textContent = words;
+      if (job === thisJob) job.goal = words; // e.g. the code doctor reads the goal
+    },
+  });
+  api.log('voice: goal sent to the brain');
+  runJob(LeftySkills.decide(job, seen));
 }
 
 api.onClick(({ hit, free, x, y }) => {
@@ -891,10 +1345,13 @@ let guardTimer = null;
 let refreshTimer = null;
 let refreshing = false;
 
+let lastSeenApp = { app: '', title: '', private: false };
+
 function rememberSeen(seen) {
   if (!seen || !seen.ok) return;
   lastSeen = seen.elements;
   lastSeenAt = Date.now();
+  if (seen.app) lastSeenApp = { app: seen.app, title: seen.title || '', private: Boolean(seen.private) };
 }
 
 function refreshSeenSoon() {
@@ -916,7 +1373,7 @@ function showGuard(element, risk) {
   setPosition(guardRing, r.x - GUARD_PAD, r.y - GUARD_PAD);
   guardRing.style.width = `${r.w + GUARD_PAD * 2}px`;
   guardRing.style.height = `${r.h + GUARD_PAD * 2}px`;
-  guardTag.textContent = `⚠️ ${risk.warning}`;
+  guardTag.textContent = `${risk.warning}`;
   const high = risk.level === 'high';
   guardRing.classList.toggle('high', high);
   guardTag.classList.toggle('high', high);
@@ -955,9 +1412,12 @@ async function checkGuard(point) {
 // The overlay ignores clicks but still receives mouse moves over the whole screen.
 document.addEventListener('mousemove', (event) => {
   clearTimeout(guardTimer);
-  if (!leftyEl.classList.contains('show') || (job && (job.ghost || job.doctor))) return; // no screen reads while ghost code follows the cursor
-  if (bubble.contains(event.target) && !bubble.classList.contains('tucked')) { hideGuard(); return; } // over Lefty's own chat
   const point = { x: event.clientX + screenArea.originX, y: event.clientY + screenArea.originY };
+  if (tip && !near(tip.element.rect, point, TIP_KEEP_PX)) hideTip(); // moved away from the explained button
+  if (picking) { previewPick(point); return; }
+  if (!leftyEl.classList.contains('show') || (job && (job.ghost || job.doctor))) return; // no screen reads while ghost code follows the cursor
+  if (focusBlock && focusBlock.quiet) return; // only passing by to close something: not summoned
+  if (bubble.contains(event.target) && !bubble.classList.contains('tucked')) { hideGuard(); return; } // over Lefty's own chat
   lastPoint = point;
   if (guarded && !contains(guarded.rect, point)) hideGuard(); // left the button: clear at once
   guardTimer = setTimeout(() => checkGuard(point), GUARD_REST_MS);
@@ -983,27 +1443,51 @@ api.onShow((position) => {
   reset();
   place(position);
   setVisible(true);
+  reportRegions();
   setTimeout(() => input.focus(), 60);
+  setTimeout(() => api.log(`bubble buttons: ${[...bubble.querySelectorAll('.bubble-head button, .ask button, .chips button')].map((b) => `"${b.textContent}" ${whereIs(b)}`).join(', ')}`), 700);
 });
 
 api.onContext((seen) => {
   if (seen.seq !== currentSeq) return;
   rememberSeen(seen);
   if (seen.ok && greeting && greeting.isConnected) {
-    greeting.textContent = `👋 Hi! I can see ${seen.app}. What's your goal?`;
+    greeting.textContent = seen.private
+      ? `Hi! I can see ${seen.app}. It's on your private list, so I'll work from its buttons only, with no screenshots. What's your goal?`
+      : `Hi! I can see ${seen.app}. What's your goal?`;
     // The editor's own problem count ("Errors: 1, Warnings: 2"): offer to find and fix them.
     const problems = isCodeEditor(seen) ? seen.elements.map((el) => /^(?:Errors?|Warnings?): (\d+)/.exec(el.name || '')).filter(Boolean)
       .reduce((sum, m) => sum + Number(m[1]), 0) : 0;
     if (problems) {
-      greeting.textContent = `👋 Hi! I spot ${problems} problem${problems === 1 ? '' : 's'} in your code. Want me to find ${problems === 1 ? 'it' : 'them'}?`;
-      addChoicesTo(greeting, [{ label: '🩺 Find & fix', primary: true, pick: () => ask('find the errors in my code') }]);
+      greeting.textContent = `Hi! I spot ${problems} problem${problems === 1 ? '' : 's'} in your code. Want me to find ${problems === 1 ? 'it' : 'them'}?`;
+      addChoicesTo(greeting, [{ label: 'Find & fix', primary: true, pick: () => ask('find the errors in my code') }]);
     }
   }
   resolveContext(seen);
 });
 
+// A goal typed in the home screen's chat: Lefty is up over the app in front; an opened chat continues where it
+// stopped (its last few messages show again, and a project built in it is the one a change goes to).
+api.onAsk(async ({ goal, chatId }) => {
+  if (chatId) {
+    const r = await api.chatGet(chatId).catch(() => null);
+    const old = r && r.ok && r.chat;
+    if (old) {
+      if (greeting && greeting.isConnected) greeting.remove();
+      for (const m of old.messages.slice(-4)) addMessage(m.text, m.role === 'user' ? 'user' : 'lefty', { say: false, save: false });
+      chat = { id: old.id, ready: Promise.resolve(old.id), earlier: old.messages.slice(-12).map((m) => `${m.role === 'user' ? 'User' : 'Lefty'}: ${String(m.text).slice(0, 600)}`) };
+      if (old.project) lastProject = old.project;
+    }
+  }
+  ask(goal);
+});
+
 api.onHide(() => {
   cancelJob();
+  hush();
+  hideTip();
+  endPick();
+  stopListening(false);
   setVisible(false);
 });
 
@@ -1025,11 +1509,519 @@ document.querySelectorAll('[data-q]').forEach((chip) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') api.requestHide();
+  if (event.key !== 'Escape') return;
+  if (picking) { endPick(); return; }
+  if (listening) { stopListening(false); return; }
+  if (tip) { hideTip(); return; }
+  if (autoWorking()) stopAuto('esc'); // the first Esc stops Lefty working; the next one closes him
+  else api.requestHide();
 });
 
-// Only catch the mouse while it's over Lefty or the bubble; everywhere else clicks reach the app below.
-for (const el of [leftyEl, bubble]) {
-  el.addEventListener('mouseenter', () => api.setInteractive(true));
-  el.addEventListener('mouseleave', () => api.setInteractive(false));
+/* ---------- Speaking ----------
+   With "Lefty talks" on, his chat replies, each new step and his explanations are read out with a Windows voice: in
+   the user's language when the AI said which (or the words' own script shows it), else the default voice. */
+let lastSpoken = ''; // for the self-test
+function speak(text, lang = lastLang) {
+  if (settings.speak !== 'on' || !window.speechSynthesis) return;
+  const said = LeftyVoice.speakable(text);
+  if (!said) return;
+  try {
+    speechSynthesis.cancel(); // only the newest thing is worth hearing
+    const utterance = new SpeechSynthesisUtterance(said);
+    const want = LeftyVoice.voiceLang(said, lang);
+    const voice = LeftyVoice.pickVoice(speechSynthesis.getVoices(), want);
+    if (voice) utterance.voice = voice;
+    if (want) utterance.lang = voice ? voice.lang : want;
+    utterance.rate = 1.05;
+    speechSynthesis.speak(utterance);
+    lastSpoken = said;
+    api.log(`speaking ${said.length} characters${voice ? ` (${voice.name})` : ''}`);
+  } catch { /* no voices on this PC: Lefty stays quiet */ }
 }
+
+function hush() {
+  try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch { /* nothing was speaking */ }
+}
+
+/* ---------- "What does this do?" ----------
+   F1 with the mouse on a control (main sends the point), or "What's this?" in the bubble and then a click: Lefty rings
+   the control and explains it beside it in a sentence or two. The brain sees its name, the controls around it and a
+   small picture of that part of the screen (never in a private app). No goal needed, and a running guide carries on. */
+const tipEl = document.getElementById('tip');
+const tipRing = document.getElementById('tip-ring');
+const pickLayer = document.getElementById('picklayer');
+const pickHint = document.getElementById('pickhint');
+const TIP_PAD = 3;
+const TIP_KEEP_PX = 60;      // the explanation stays while the mouse is this close to the control
+const TIP_SHOW_MS = 20000;
+const NEARBY_PX = { x: 220, y: 120 };
+let tip = null;              // { element, token, timer }
+let tipToken = 0;
+let picking = false;
+let pickWasTucked = false;
+
+const near = (rect, point, pad) => point.x >= rect.x - pad && point.x <= rect.x + rect.w + pad && point.y >= rect.y - pad && point.y <= rect.y + rect.h + pad;
+
+// The names of the controls around one (what the AI needs to tell a "Close" in a dialog from a "Close" on a tab).
+function nearbyNames(element, elements) {
+  const cx = element.rect.x + element.rect.w / 2;
+  const cy = element.rect.y + element.rect.h / 2;
+  const names = elements.filter((el) => el !== element && el.rect && String(el.name || '').trim()
+    && Math.abs(el.rect.x + el.rect.w / 2 - cx) <= NEARBY_PX.x && Math.abs(el.rect.y + el.rect.h / 2 - cy) <= NEARBY_PX.y)
+    .map((el) => String(el.name).trim().slice(0, 60));
+  return [...new Set(names)].slice(0, 12);
+}
+
+function showTip(element, text, { waiting = false, risky = false } = {}) {
+  hideGuard();
+  clearTimeout(tip && tip.timer);
+  const token = ++tipToken;
+  tip = { element, token, timer: setTimeout(() => { if (tip && tip.token === token) hideTip(); }, TIP_SHOW_MS) };
+  const r = { x: element.rect.x - screenArea.originX, y: element.rect.y - screenArea.originY, w: element.rect.w, h: element.rect.h };
+  setPosition(tipRing, r.x - TIP_PAD, r.y - TIP_PAD);
+  tipRing.style.width = `${r.w + TIP_PAD * 2}px`;
+  tipRing.style.height = `${r.h + TIP_PAD * 2}px`;
+  tipRing.classList.add('show');
+  setTipText(text, { waiting, risky });
+  api.raise();
+  return token;
+}
+
+// The explanation goes below the control, or above it when there's no room.
+function setTipText(text, { waiting = false, risky = false } = {}) {
+  if (!tip) return;
+  tipEl.textContent = text;
+  tipEl.classList.toggle('waiting', waiting);
+  tipEl.classList.toggle('risky', risky);
+  tipEl.classList.add('show');
+  const r = { x: tip.element.rect.x - screenArea.originX, y: tip.element.rect.y - screenArea.originY, w: tip.element.rect.w, h: tip.element.rect.h };
+  const w = tipEl.offsetWidth || 260;
+  const h = tipEl.offsetHeight || 40;
+  const below = r.y + r.h + TIP_PAD + 8;
+  const y = below + h <= screenArea.height - GAP ? below : r.y - TIP_PAD - h - 8;
+  const box = clampToScreen({ x: r.x - TIP_PAD, y, w, h });
+  setPosition(tipEl, box.x, box.y);
+}
+
+function hideTip() {
+  if (!tip) return;
+  clearTimeout(tip.timer);
+  tip = null;
+  tipToken += 1; // an answer still on its way is not shown
+  tipEl.classList.remove('show', 'waiting', 'risky');
+  tipRing.classList.remove('show');
+}
+
+const TYPE_WORDS = { Button: 'button', SplitButton: 'button', MenuItem: 'menu item', TabItem: 'tab', ListItem: 'item', TreeItem: 'item',
+  Hyperlink: 'link', CheckBox: 'tick box', RadioButton: 'option', ComboBox: 'drop-down', Edit: 'text box', Slider: 'slider', Document: 'text area' };
+
+async function explainAt(point) {
+  if (!leftyEl.classList.contains('show')) return;
+  if (Date.now() - lastSeenAt > GUARD_STALE_MS) rememberSeen(await api.rescan({ quiet: true }));
+  const element = LeftyGuard.elementAt(point, lastSeen);
+  if (!element) {
+    showTip({ rect: { x: point.x - 12, y: point.y - 12, w: 24, h: 24 } }, "Rest the mouse on a button, then press F1 and I'll tell you what it does.");
+    return;
+  }
+  const token = showTip(element, 'Let me look…', { waiting: true });
+  api.log(`explain: ${element.type} "${element.name}"`);
+  const result = await api.explain({
+    element: { name: element.name, type: element.type, rect: element.rect }, nearby: nearbyNames(element, lastSeen),
+    app: lastSeenApp.app, title: lastSeenApp.title, lang: lastLang,
+  });
+  if (!tip || tip.token !== token) return; // the mouse moved on, or another button was asked about
+  const name = String(element.name || '').trim();
+  const what = `${name ? `"${name}"` : 'This'} ${name ? `is a ${TYPE_WORDS[element.type] || 'control'}` : `is a ${TYPE_WORDS[element.type] || 'control'} without a name`}`;
+  const text = result.ok ? result.text
+    : result.error === 'no-brain' ? `${what}. Connect the AI and I'll tell you what it does.`
+      : result.error === 'nothing' ? "I can't tell what's there." : result.error;
+  setTipText(result.ok && result.risky ? `${text}` : text, { risky: Boolean(result.ok && result.risky) });
+  api.log(`explain: answered (${result.ok ? 'brain' : result.error})`);
+  speak(text);
+}
+api.onExplain((point) => { if (picking) endPick(); explainAt(point); });
+
+// "What's this?" in the bubble: the next click anywhere picks the control (and doesn't reach the app).
+function startPick() {
+  if (picking || !leftyEl.classList.contains('show')) return;
+  picking = true;
+  hideTip();
+  hideGuard();
+  pickWasTucked = bubble.classList.contains('tucked');
+  tuckBubble(true);
+  pickLayer.classList.add('show');
+  pickHint.classList.add('show');
+  api.setPicking(true);
+  api.log('explain: picking a control');
+  api.rescan({ quiet: true }).then(rememberSeen).catch(() => {});
+}
+
+function endPick() {
+  if (!picking) return;
+  picking = false;
+  pickLayer.classList.remove('show');
+  pickHint.classList.remove('show');
+  tipRing.classList.remove('show');
+  api.setPicking(false);
+  if (!pickWasTucked) tuckBubble(false);
+}
+
+function previewPick(point) {
+  const element = LeftyGuard.elementAt(point, lastSeen);
+  if (!element) { tipRing.classList.remove('show'); return; }
+  const r = element.rect;
+  setPosition(tipRing, r.x - screenArea.originX - TIP_PAD, r.y - screenArea.originY - TIP_PAD);
+  tipRing.style.width = `${r.w + TIP_PAD * 2}px`;
+  tipRing.style.height = `${r.h + TIP_PAD * 2}px`;
+  tipRing.classList.add('show');
+}
+
+pickLayer.addEventListener('click', (event) => {
+  const point = { x: event.clientX + screenArea.originX, y: event.clientY + screenArea.originY };
+  endPick();
+  explainAt(point);
+});
+document.getElementById('whats-this').addEventListener('click', startPick);
+
+/* ---------- Focus mode ----------
+   "Focus 30 minutes on Chrome and physics", typed or said: until the time is up, main closes anything else that comes
+   to the front, and Lefty pops up to say why. Without a list of work apps or tabs, Lefty asks (suggesting the app he
+   was called over). */
+let focusState = { on: false };
+let focusNoticeTimer = null;
+const FOCUS_NOTICE_MS = 6000; // a "not now" pops up and goes again by itself, unless the user starts typing
+const BLOCKED_LINES = [
+  'That can wait until you complete your work.',
+  'Not now. Please finish your work first.',
+  'That can wait until your focus session ends.',
+];
+api.getFocus().then((state) => { focusState = state; }).catch(() => {});
+api.onFocus((state) => { focusState = state; });
+
+const focusLeft = () => LeftyFocus.timeLeft(focusState.until - Date.now());
+const workAppSuggestion = () => (/^(your desktop|the taskbar|this app)$/.test(lastSeenApp.app || '') ? '' : lastSeenApp.app || '');
+
+async function startFocus({ minutes, allow = [] }) {
+  cancelJob();
+  stopPointing();
+  tuckBubble(false);
+  if (!minutes) { // "stop focus mode"
+    if (focusState.on) { await api.stopFocus(); addMessage('Focus mode is off.', 'lefty'); } else addMessage("Focus mode isn't on.", 'lefty');
+    return;
+  }
+  if (!allow.length) { askFocusApps(minutes); return; }
+  const result = await api.startFocus({ minutes, allow });
+  if (!result.ok) { addMessage(`${result.error}`, 'lefty'); return; }
+  api.log(`focus: on for ${minutes} min`);
+  addMessage(`Focus mode on for ${LeftyFocus.timeLeft(minutes * 60000)}. Only ${allow.join(', ')} until then; I'll close anything else. Say "stop focus mode" to end it early.`, 'lefty');
+}
+
+// A small answer box inside a message: the text, a main button and optional extras. onSubmit gets the text.
+function askInMessage(el, { value = '', placeholder = '', label, button, extras = [], onSubmit }) {
+  const row = document.createElement('form');
+  row.className = 'namebox';
+  const box = document.createElement('input');
+  box.value = value;
+  box.placeholder = placeholder;
+  box.maxLength = 300;
+  box.spellcheck = false;
+  box.setAttribute('aria-label', label);
+  const go = document.createElement('button');
+  go.type = 'submit';
+  go.className = 'primary';
+  go.textContent = button;
+  const parts = extras.map((extra) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = extra.label;
+    b.title = extra.title || '';
+    b.addEventListener('click', () => extra.pick(box));
+    return b;
+  });
+  const done = () => [box, go, ...parts].forEach((x) => { x.disabled = true; });
+  row.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (go.disabled || !box.value.trim()) return;
+    done();
+    onSubmit(box.value.trim());
+  });
+  row.append(box, ...parts, go);
+  el.append(row);
+  keepBubbleOnScreen();
+  api.focusSelf();
+  setTimeout(() => { box.focus(); box.select(); }, 80);
+  return box;
+}
+
+function askFocusApps(minutes) {
+  const el = addMessage(`${LeftyFocus.timeLeft(minutes * 60000)} of focus. Which apps or tabs are for your work? (e.g. VS Code, physics)`, 'lefty');
+  askInMessage(el, {
+    value: workAppSuggestion(), placeholder: 'VS Code, Chrome, notes', label: 'Apps for your work', button: 'Start',
+    onSubmit: (text) => startFocus({ minutes, allow: text.split(/,|\band\b/).map((s) => s.trim()).filter(Boolean) }),
+  });
+}
+
+// The session is over: Lefty comes up and says so.
+api.onFocusNotice(({ kind, minutes }) => {
+  clearTimeout(focusNoticeTimer);
+  if (kind !== 'done') return;
+  if (greeting && greeting.isConnected && messages.children.length === 1) greeting.remove();
+  addMessage(`Time's up. You stayed focused for ${LeftyFocus.timeLeft(minutes * 60000)}. Time for a break.`, 'lefty');
+  focusNoticeTimer = setTimeout(() => { if (!input.value && !job && !listening) api.requestHide(); }, FOCUS_NOTICE_MS);
+});
+input.addEventListener('input', () => clearTimeout(focusNoticeTimer));
+
+// Something that isn't the work came up: Lefty appears without his chat, glides to its close button and presses it,
+// and the small dark tag beside him says why (main closes it as he presses). With his chat already open, the chat
+// steps aside meanwhile.
+let focusBlock = null; // { quiet }
+api.onFocusBlock(({ quiet, app, left, rect, area, cursor }) => {
+  if (job || picking) return; // busy with the user's own goal: main still closes it, quietly
+  focusBlock = { quiet };
+  if (quiet) {
+    screenArea = area;
+    stopPointing();
+    leftyEl.classList.remove('glide');
+    place(cursor);
+    leftyEl.classList.add('show');
+    leftyEl.classList.remove('hide');
+  } else {
+    clearTimeout(focusNoticeTimer);
+    tuckBubble(true);
+  }
+  const line = BLOCKED_LINES[Math.floor(Math.random() * BLOCKED_LINES.length)];
+  const say = `${line} ${LeftyFocus.timeLeft(left)} left.`;
+  requestAnimationFrame(() => {
+    if (rect) pointAt({ rect });
+    stepTag.classList.add('wrap');
+    setStepTag('', say);
+    speak(line);
+    if (rect) setTimeout(() => { playBody('press'); ring.classList.add('hit'); }, 650);
+  });
+  api.log(`focus: showed Lefty closing ${app || 'an app'}`);
+});
+
+api.onFocusBlockEnd(({ quiet }) => {
+  if (!focusBlock) return;
+  focusBlock = null;
+  stopPointing();
+  stepTag.classList.remove('wrap');
+  if (quiet) {
+    leftyEl.classList.remove('show');
+    leftyEl.classList.add('hide');
+  } else {
+    tuckBubble(false);
+  }
+});
+
+/* ---------- Building a project ----------
+   "Build me a portfolio website": Lefty asks which folder (a new one under Documents\Lefty Projects, typed, or
+   picked with Browse), the AI writes the files and main saves them there. A change to what he just built ("add a
+   contact page", "make it dark") offers the same folder, so the AI changes that project; anything else is a new
+   project in a new folder, with a button to update the last one instead. */
+let lastProject = '';
+
+// A short name for the project's folder, from what to build: "a portfolio website for me" -> "portfolio website".
+const projectName = (request) => String(request || '').toLowerCase().replace(/[^a-z0-9\s-]/g, ' ')
+  .split(/\s+/).filter((w) => w.length > 2 && !/^(build|make|create|write|code|please|for|the|and|with|that|this|simple|new|using|want|need|can|you|lefty)$/.test(w))
+  .slice(0, 3).join(' ');
+
+// "add a contact page", "make it dark", "fix the menu": a change to the project Lefty just built, not a new one.
+const CHANGE_WORDS = /^(?:please\s+|now\s+|can you\s+)*(?:add|change|update|edit|fix|improve|remove|delete|rename|replace|move|also|make\s+(?:it|the|this|that|them))\b|\b(?:the site|the website|the page|the app|the game|the project|my project)\b/i;
+
+async function startBuild(decision) {
+  const request = decision.request;
+  const goal = String((job && job.goal) || request).trim(); // the user's own words (cancelJob forgets them)
+  cancelJob();
+  stopPointing();
+  tuckBubble(false);
+  const change = Boolean(lastProject) && CHANGE_WORDS.test(goal) && !/\b(?:new|another|fresh|separate)\b/i.test(goal);
+  const fresh = await api.suggestFolder(projectName(request));
+  const el = addMessage(change
+    ? "I'll change the project I built last time. Is this the right folder?"
+    : "I'll build it as a new project and write the files myself. Which folder should I use?", 'lefty');
+  askInMessage(el, {
+    value: change ? lastProject : fresh, placeholder: 'C:\\Users\\you\\Documents\\my-project', label: 'Project folder', button: 'Build',
+    extras: [
+      { label: 'Browse…', title: 'Pick a folder', pick: async (box) => { const picked = await api.pickFolder(box.value); if (picked.ok) box.value = picked.folder; api.focusSelf(); box.focus(); } },
+    ],
+    onSubmit: (chosen) => runBuild(chosen, request),
+  });
+}
+
+async function runBuild(folder, request) {
+  addMessage('Building… a whole project takes a minute or two.', 'lefty');
+  const typing = showTyping();
+  api.log('build: started');
+  const result = await api.buildProject({ folder, request, lang: lastLang });
+  typing.remove();
+  if (!result.ok) {
+    api.log(`build: failed (${result.error})`);
+    addMessage(result.error === 'no-brain' ? `The AI isn't connected yet. ${NO_KEY_HINT}` : `${result.error}`, 'lefty');
+    return;
+  }
+  lastProject = result.folder;
+  if (chat.ready) chat.ready.then((id) => { if (id) api.chatProject({ chatId: id, folder: result.folder }); });
+  api.log(`build: ${result.files.length} file(s), ${result.changed} replaced`);
+  const n = result.files.length;
+  const lines = [
+    result.summary || 'Done.',
+    `${n} file${n === 1 ? '' : 's'} in ${result.folder}${result.changed ? ` (${result.changed} changed; the old ones are in .lefty-backup)` : ''}`,
+    result.run ? `To run it: ${result.run}` : '',
+    'Tell me what to change and I\'ll update it.',
+  ].filter(Boolean);
+  const choices = [{ label: 'Open in VS Code', primary: true, pick: () => api.openProject({ folder: result.folder, how: 'code' }) }];
+  if (result.hasIndex) choices.push({ label: 'Open in browser', pick: () => api.openProject({ folder: result.folder, how: 'browser' }) });
+  choices.push({ label: 'Show folder', pick: () => api.openProject({ folder: result.folder, how: 'folder' }) });
+  addChoices(lines.join('\n'), choices);
+}
+
+/* ---------- Voice ----------
+   Hold Ctrl+Space (main says when it goes down and comes up), or click the microphone: Lefty records while he
+   listens, turns it into a small WAV file and sends it to the brain as the goal, and he gets to work. It goes when the
+   keys come up, when the microphone is clicked again, or by itself once the user stops talking. Nothing is recorded
+   until then, and typing always works, microphone or not. */
+const MAX_LISTEN_MS = 30000;
+const MIN_LISTEN_MS = 400;
+const QUIET_AFTER_CLICK_MS = 1500; // the microphone button: this much quiet after talking sends it
+const QUIET_WHILE_HELD_MS = 2500;  // holding the keys: a longer pause, since letting go sends it anyway
+const LEVEL_EVERY_MS = 100;
+let listening = null; // { stream, recorder, chunks, startedAt, timer, note, held, meter }
+
+function setListening(on, text) {
+  micButton.classList.toggle('listening', on);
+  leftyEl.classList.toggle('listening', on);
+  if (listening && listening.note && listening.note.isConnected && text) listening.note.textContent = text;
+}
+
+async function startListening({ held = false } = {}) {
+  if (listening || !leftyEl.classList.contains('show')) return;
+  const state = { chunks: [], startedAt: Date.now(), stream: null, recorder: null, timer: null, note: null, held, meter: null };
+  listening = state;
+  tuckBubble(false);
+  state.note = addMessage('One moment…', 'lefty', { say: false });
+  state.note.classList.add('listening-msg');
+  setListening(true);
+  hush(); // Lefty mustn't hear himself
+  if (!(await api.brainReady())) {
+    endListening(state);
+    addMessage(`I need the AI connected to understand speech. ${NO_KEY_HINT}`, 'lefty');
+    return;
+  }
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error('no media devices'), { name: 'NotFoundError' });
+    state.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch (error) {
+    endListening(state);
+    api.log(`voice: no microphone (${error.name})`);
+    addMessage(error.name === 'NotAllowedError'
+      ? "Windows didn't let me use the microphone. Turn it on in Settings > Privacy & security > Microphone, or type instead."
+      : "I can't find a microphone. You can type your goal instead.", 'lefty');
+    return;
+  }
+  if (listening !== state) { // let go before the microphone was ready: nothing was heard yet
+    state.stream.getTracks().forEach((t) => t.stop());
+    if (state.letGo) addMessage('Keep holding Ctrl+Space a moment longer, and start talking when I say “Listening”.', 'lefty');
+    return;
+  }
+  state.recorder = new MediaRecorder(state.stream);
+  state.recorder.ondataavailable = (event) => { if (event.data && event.data.size) state.chunks.push(event.data); };
+  state.stopped = new Promise((resolve) => { state.recorder.onstop = resolve; });
+  state.recorder.start(250);
+  state.startedAt = Date.now();
+  state.timer = setTimeout(() => stopListening(true), MAX_LISTEN_MS);
+  watchForQuiet(state);
+  setListening(true, held ? "Listening… let go when you're done" : "Listening… I'll go when you stop talking");
+  api.log('voice: listening');
+}
+
+// Lefty sends it himself once the user has spoken and then gone quiet.
+function watchForQuiet(state) {
+  try {
+    const context = new AudioContext();
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
+    context.createMediaStreamSource(state.stream).connect(analyser);
+    const samples = new Float32Array(analyser.fftSize);
+    const ear = LeftyVoice.endOfSpeech({ quietMs: state.held ? QUIET_WHILE_HELD_MS : QUIET_AFTER_CLICK_MS });
+    const timer = setInterval(() => {
+      analyser.getFloatTimeDomainData(samples);
+      let sum = 0;
+      for (const v of samples) sum += v * v;
+      if (ear.hear(Math.sqrt(sum / samples.length), Date.now()) && listening === state) {
+        api.log('voice: quiet after talking, sending');
+        stopListening(true);
+      }
+    }, LEVEL_EVERY_MS);
+    state.meter = { context, timer };
+  } catch { /* no meter: the keys or the button still send it */ }
+}
+
+function endListening(state) {
+  if (listening === state) listening = null;
+  clearTimeout(state.timer);
+  if (state.meter) { clearInterval(state.meter.timer); state.meter.context.close().catch(() => {}); state.meter = null; }
+  setListening(false);
+  if (state.note && state.note.isConnected) state.note.remove();
+}
+
+async function stopListening(send) {
+  const state = listening;
+  if (!state) return;
+  endListening(state);
+  if (!state.recorder) { state.letGo = send; return; } // the microphone wasn't open yet: startListening lets it go
+  if (state.recorder.state !== 'inactive') state.recorder.stop();
+  await state.stopped;
+  state.stream.getTracks().forEach((t) => t.stop());
+  if (!send) { api.log('voice: cancelled'); return; }
+  if (Date.now() - state.startedAt < MIN_LISTEN_MS || !state.chunks.length) {
+    addMessage("I didn't catch that. Hold Ctrl+Space (or click) while you talk.", 'lefty');
+    return;
+  }
+  let audio;
+  try {
+    const blob = new Blob(state.chunks, { type: state.recorder.mimeType || 'audio/webm' });
+    const context = new AudioContext();
+    const sound = await context.decodeAudioData(await blob.arrayBuffer());
+    context.close();
+    const channels = Array.from({ length: sound.numberOfChannels }, (_, c) => sound.getChannelData(c));
+    if (!LeftyVoice.heardSomething(channels[0], sound.sampleRate)) {
+      api.log('voice: only silence');
+      addMessage("I couldn't hear anything. Is your microphone on and close enough?", 'lefty');
+      return;
+    }
+    audio = { mime: 'audio/wav', data: LeftyVoice.base64(LeftyVoice.toWav(channels, sound.sampleRate)) };
+    api.log(`voice: ${sound.duration.toFixed(1)} s recorded`);
+  } catch (error) {
+    api.log(`voice: could not read the recording (${error.message})`);
+    addMessage('Something went wrong with the recording. Try again, or type instead.', 'lefty');
+    return;
+  }
+  askVoice(audio);
+}
+
+micButton.addEventListener('click', () => { if (listening) stopListening(true); else startListening(); });
+api.onVoiceHold(({ on }) => { if (on) startListening({ held: true }); else stopListening(true); });
+
+// Only catch the mouse while it's over Lefty, the bubble or the chip; everywhere else clicks reach the app below.
+// Main watches the mouse against these rects (global DIPs); they're re-measured often, since the bubble glides.
+const REGIONS_EVERY_MS = 100;
+let lastRegions = '';
+function reportRegions() {
+  const rects = [];
+  const add = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width && r.height) rects.push({ x: r.left + screenArea.originX, y: r.top + screenArea.originY, w: r.width, h: r.height });
+  };
+  // The chat has no panel: only its bubbles take clicks, and the gaps between them let clicks through to the app.
+  if (bubble.classList.contains('show') && !bubble.classList.contains('tucked')) {
+    for (const el of [bubble.querySelector('.bubble-head'), ...messages.children, form, ...bubble.querySelectorAll('.chips button')]) if (el) add(el);
+  }
+  if (leftyEl.classList.contains('show') && !leftyEl.classList.contains('pointing')) add(leftyEl); // never while on a target
+  if (modeChip.classList.contains('show')) add(modeChip);
+  const key = JSON.stringify(rects.map((r) => [r.x, r.y, r.w, r.h].map(Math.round)));
+  if (key === lastRegions) return;
+  lastRegions = key;
+  api.setRegions(rects);
+}
+setInterval(reportRegions, REGIONS_EVERY_MS);

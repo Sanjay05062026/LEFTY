@@ -65,7 +65,7 @@
 
       <ul class="perm-list">
         <li class="perm" data-perm="screen" data-required>
-          <span class="perm-icon">🖥️</span>
+          <span class="perm-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
           <div class="perm-text">
             <h3>Screen capture <span class="tag">Required</span></h3>
             <p>See what's on your screen when you call Lefty.</p>
@@ -73,7 +73,7 @@
           <button class="btn-allow" type="button">Allow</button>
         </li>
         <li class="perm" data-perm="uia" data-required>
-          <span class="perm-icon">🔎</span>
+          <span class="perm-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
           <div class="perm-text">
             <h3>Screen reading <span class="tag">Required</span></h3>
             <p>Read buttons and menus so Lefty can point at exactly the right spot.</p>
@@ -81,7 +81,7 @@
           <button class="btn-allow" type="button">Allow</button>
         </li>
         <li class="perm" data-perm="shortcut" data-required>
-          <span class="perm-icon">⌨️</span>
+          <span class="perm-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></span>
           <div class="perm-text">
             <h3>Global shortcut <span class="tag">Required</span></h3>
             <p>Call Lefty from any app with <b>Ctrl + Space</b>.</p>
@@ -89,16 +89,16 @@
           <button class="btn-allow" type="button">Allow</button>
         </li>
         <li class="perm" data-perm="mic">
-          <span class="perm-icon">🎙️</span>
+          <span class="perm-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="22"/></svg></span>
           <div class="perm-text">
             <h3>Microphone <span class="tag optional">Optional</span></h3>
-            <p>Ask Lefty with your voice in English, Tamil or Hindi.</p>
+            <p>Hold Ctrl + Space and tell Lefty your goal, in your own language.</p>
           </div>
           <button class="btn-allow" type="button">Allow</button>
         </li>
       </ul>
 
-      <div class="privacy">🔒 Lefty only looks at your screen when you call it. Password fields stay hidden, and Lefty never clicks for you.</div>
+      <div class="privacy">Lefty only looks at your screen when you ask him something, and never in the apps you mark private. He clicks and types for you only in Do it mode, asks before anything risky, and never types passwords.</div>
 
       <div class="perms-actions">
         <button class="btn-ghost" id="perm-all" type="button">Allow all</button>
@@ -107,34 +107,140 @@
     </section>
   </main>
 
-  <!-- ===== Home ===== -->
+  <!-- ===== Home: chats on the left, the chat in the middle ===== -->
   <div id="view-home" class="view home" hidden>
     <aside class="sidebar">
       <div class="brand"><img src="../../assets/lefty.svg" alt=""><span>Lefty</span></div>
-      <button class="btn-new" id="new-goal" type="button">＋ New goal</button>
-      <p class="side-label">Recent goals</p>
-      <div class="empty-recent">No goals yet. Call Lefty to start one.</div>
+      <button class="btn-new" id="new-chat" type="button"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New chat</button>
+      <p class="side-label">Chats</p>
+      <nav class="chat-list" id="chat-list" aria-label="Your chats"></nav>
+      <section class="focus-card" aria-label="Focus mode">
+        <p class="side-label">Focus mode</p>
+        <form id="focus-off" class="focus-form">
+          <label class="focus-time"><input id="focus-minutes" type="number" min="1" max="480" value="30" aria-label="Minutes"> min</label>
+          <input id="focus-allow" placeholder="Work apps or tabs: VS Code, physics" aria-label="Apps or tabs for your work" spellcheck="false">
+          <button class="focus-start" type="submit">Start focus</button>
+        </form>
+        <div id="focus-on" class="focus-on" hidden>
+          <strong id="focus-left"></strong>
+          <small id="focus-apps"></small>
+          <button class="focus-stop" id="focus-stop" type="button">Stop</button>
+        </div>
+      </section>
+      <section class="storage" aria-label="Storage">
+        <div class="storage-head"><span>Storage</span><small id="storage-where"></small></div>
+        <div class="storage-bar" role="progressbar" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" id="storage-bar"><i id="storage-fill"></i></div>
+        <small id="storage-text" class="storage-text">Checking…</small>
+      </section>
       <div class="side-bottom">
-        <button class="side-item" id="open-settings" type="button">⚙️ Permissions</button>
+        <button class="side-item" id="open-settings" type="button">Settings</button>
         <div class="user-chip">
           <span class="avatar" id="avatar">L</span>
           <div class="user-meta"><strong id="user-name"></strong><small id="user-email"></small></div>
         </div>
-        <button class="side-item" id="logout" type="button">↩ Log out</button>
+        <button class="side-item" id="logout" type="button">Log out</button>
       </div>
     </aside>
 
     <main class="home-main">
-      <span class="status" id="shortcut-status">Shortcut active</span>
-      <img src="../../assets/lefty.svg" class="hero-lefty" alt="Lefty">
-      <h1>Hi <span id="hello-name"></span>, Lefty is ready!</h1>
-      <p class="muted lead">Press <span id="keycaps" class="keycaps"></span> in any app to call Lefty.</p>
-      <button class="btn-primary big" id="try-now" type="button">Try it now</button>
+      <header class="chat-head">
+        <h2 id="chat-title">New chat</h2>
+        <span class="status" id="shortcut-status">Shortcut active</span>
+      </header>
 
-      <div class="tips">
-        <div class="tip"><span>🆘</span><h3>Stuck?</h3><p>Ask "what do I do next?" and Lefty points to the next step.</p></div>
-        <div class="tip"><span>🎯</span><h3>Give a goal</h3><p>"Create a JSON file": Lefty guides you until it's done.</p></div>
-        <div class="tip"><span>👋</span><h3>Send him away</h3><p>Press Esc or the shortcut again to hide Lefty.</p></div>
+      <section class="chat-scroll" id="chat-scroll">
+        <div id="welcome" class="welcome">
+          <img src="../../assets/lefty.svg" class="hero-lefty" alt="Lefty">
+          <h1>Hi <span id="hello-name"></span>, Lefty is ready!</h1>
+          <p class="muted lead">Type below, or press <span id="keycaps" class="keycaps"></span> in any app to call Lefty.</p>
+          <div class="tips">
+            <button class="tip" type="button" data-try="Create a JSON file on my desktop"><h3>Give a goal</h3><p>"Create a JSON file": Lefty guides you until it's done.</p></button>
+            <button class="tip" type="button" data-try="Build me a portfolio website"><h3>Build a project</h3><p>"Build me a portfolio website": Lefty asks for a folder and writes the files.</p></button>
+            <button class="tip" type="button" data-try="Focus 30 minutes on VS Code"><h3>Focus mode</h3><p>"Focus 30 minutes on VS Code": anything else gets closed until you're done.</p></button>
+            <div class="tip"><h3>Do it for me</h3><p>Switch to Do it and Lefty clicks and types for you. Esc stops him.</p></div>
+            <div class="tip"><h3>Just say it</h3><p>Hold Ctrl + Space and say what you want, in your own language.</p></div>
+            <div class="tip"><h3>What's this?</h3><p>With Lefty open, rest the mouse on any button and press F1.</p></div>
+          </div>
+        </div>
+        <div id="thread" class="thread" hidden></div>
+      </section>
+
+      <form id="composer" class="composer">
+        <textarea id="composer-input" rows="1" placeholder="Ask Lefty, or give him a goal" aria-label="Message Lefty" spellcheck="true"></textarea>
+        <button type="submit" id="composer-send" aria-label="Send"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+      </form>
+      <p class="composer-hint">Lefty steps aside and works on the app behind this window. Enter sends, Shift+Enter adds a line.</p>
+    </main>
+
+    <!-- Settings: slides over the chat -->
+    <main class="settings-main" id="settings-main" hidden>
+      <header class="chat-head">
+        <h2>Settings</h2>
+        <button class="btn-ghost" id="close-settings" type="button">Back to chat</button>
+      </header>
+      <div class="settings-scroll">
+      <section class="prefs" aria-label="Settings">
+        <div class="pref">
+          <div class="pref-text">
+            <h3>How Lefty helps</h3>
+            <p>Learn: Lefty points and you click. Do it: Lefty clicks and types for you, and asks before anything risky.</p>
+          </div>
+          <div class="seg" id="pref-mode" role="radiogroup" aria-label="How Lefty helps">
+            <button type="button" role="radio" data-value="learn">Learn</button>
+            <button type="button" role="radio" data-value="auto">Do it</button>
+          </div>
+        </div>
+        <div class="pref">
+          <div class="pref-text">
+            <h3>Lefty's size</h3>
+            <p>How big Lefty is drawn on your screen.</p>
+          </div>
+          <div class="seg" id="pref-size" role="radiogroup" aria-label="Lefty's size">
+            <button type="button" role="radio" data-value="small">Small</button>
+            <button type="button" role="radio" data-value="normal">Normal</button>
+            <button type="button" role="radio" data-value="large">Large</button>
+          </div>
+        </div>
+        <div class="pref">
+          <div class="pref-text">
+            <h3>Lefty talks</h3>
+            <p>Lefty reads his answers and each step out loud, in your language when Windows has a voice for it.</p>
+          </div>
+          <div class="seg" id="pref-speak" role="radiogroup" aria-label="Lefty talks">
+            <button type="button" role="radio" data-value="off">Off</button>
+            <button type="button" role="radio" data-value="on">On</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="privacy-card" aria-labelledby="privacy-title">
+        <h3 id="privacy-title">Privacy</h3>
+        <p class="privacy-what">Lefty sends something only when you ask him: your goal (typed or spoken), the names of the buttons on screen, and a screenshot of the screen you're on. It goes to the AI to work out the next step and is not kept. He never reads password boxes, and he clicks and types for you only in Do it mode.</p>
+        <h4>Private apps</h4>
+        <p class="muted small">In these apps Lefty never takes a screenshot or reads your code. He works from the button names alone.</p>
+        <div class="private-list" id="private-list"></div>
+        <form class="private-add" id="private-form">
+          <select id="private-open" aria-label="Add an app that is open now">
+            <option value="">Add an open app…</option>
+          </select>
+          <input id="private-name" placeholder="or its program name, e.g. keepass" aria-label="Program name" autocomplete="off" spellcheck="false">
+          <button class="btn-small" type="submit">Add</button>
+        </form>
+        <p class="private-suggest">Often kept private:
+          <button type="button" data-app="1password">1Password</button>
+          <button type="button" data-app="bitwarden">Bitwarden</button>
+          <button type="button" data-app="keepass">KeePass</button>
+          <button type="button" data-app="keepassxc">KeePassXC</button>
+        </p>
+        <p class="muted small">Banking websites open inside your browser: to keep one private, add the browser while you use it.</p>
+      </section>
+      <section class="pref perm-row">
+        <div class="pref-text">
+          <h3>Permissions</h3>
+          <p>Screen capture, screen reading, the shortcut and the microphone.</p>
+        </div>
+        <button class="btn-small" id="open-permissions" type="button">Review</button>
+      </section>
       </div>
     </main>
   </div>

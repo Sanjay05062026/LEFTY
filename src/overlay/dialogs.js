@@ -45,14 +45,14 @@
     state.kind = kind;
     const area = folderArea(elements);
     if (!state.folderPicked && area) {
-      return { id: 'dialog:folder', kind: 'choose', label: 'Pick any folder 📁', target: area };
+      return { id: 'dialog:folder', kind: 'choose', label: 'Pick any folder', target: area };
     }
     const box = fileNameBox(elements);
     if (!state.nameTouched && box) {
-      return { id: 'dialog:name', kind: 'type', label: kind === 'save' ? 'Name it anything ✏️' : 'Pick or type the file ✏️', target: box };
+      return { id: 'dialog:name', kind: 'type', label: kind === 'save' ? 'Name it anything' : 'Pick or type the file', target: box };
     }
     const confirm = button(elements, kind === 'save' ? /^save$/i : /^open$/i);
-    if (confirm) return { id: 'dialog:confirm', kind: 'click', label: kind === 'save' ? 'Save 💾' : 'Open 📂', target: confirm };
+    if (confirm) return { id: 'dialog:confirm', kind: 'click', label: kind === 'save' ? 'Save' : 'Open', target: confirm };
     return { wait: true };
   }
 

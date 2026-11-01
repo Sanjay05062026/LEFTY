@@ -7,7 +7,11 @@
 //   GET  /health     -> { ok, brain }                 is it up, and which AI it uses
 //   POST /v1/step    -> the next step (see brain.nextStep), or { ok: false, error } with an HTTP error status
 //   POST /v1/check-code -> the errors in a file of code and their fixes (see brain.checkCode)
+//   POST /v1/explain -> what one control does, in a sentence or two (see brain.explain)
+//   POST /v1/build   -> whole files for a project folder (see brain.buildProject)
 //   POST /v1/warmup  -> { ok }                         a tiny request so the user's first real answer is fast
+// A step may come without a screenshot (an app on the user's private list) and with a spoken goal instead of a typed
+// one (audio: { mime, data } in base64).
 //
 // Settings (environment variables, or the .env file next to package.json):
 //   GEMINI_API_KEY         the AI key (as for the app on its own)
@@ -66,12 +70,26 @@ function createLimiter({ perMinute = 0, perDay = 0, now = Date.now } = {}) {
   };
 }
 
-// The step request, checked: only the fields the brain uses, with the screenshot turned back into bytes.
+const MAX_AUDIO_CHARS = 6 * 1024 * 1024; // base64 of about 4 MB: two minutes of 16 kHz speech
+
+// A spoken goal: { mime: 'audio/...', data: base64 }, or null.
+function audioInput(audio) {
+  if (audio == null) return null;
+  if (typeof audio !== 'object' || !/^audio\/[\w.+-]+$/.test(String(audio.mime || '')) || typeof audio.data !== 'string' || !audio.data) {
+    throw new HttpError(400, 'audio is not a recording');
+  }
+  if (audio.data.length > MAX_AUDIO_CHARS) throw new HttpError(413, 'recording too long');
+  return { mime: audio.mime, data: audio.data };
+}
+
+// The step request, checked: only the fields the brain uses, with the screenshot turned back into bytes. No
+// screenshot is fine (a private app); no goal is fine when it was spoken.
 function stepInput(body) {
-  if (!body || typeof body.goal !== 'string' || !body.goal.trim()) throw new HttpError(400, 'goal missing');
+  const audio = audioInput(body && body.audio);
+  if (!body || typeof body.goal !== 'string' || (!body.goal.trim() && !audio)) throw new HttpError(400, 'goal missing');
   const display = body.display;
   if (!display || !display.bounds || !display.size) throw new HttpError(400, 'display missing');
-  if (typeof body.jpeg !== 'string' || !body.jpeg) throw new HttpError(400, 'screenshot missing');
+  if (body.jpeg != null && (typeof body.jpeg !== 'string' || !body.jpeg)) throw new HttpError(400, 'screenshot is not an image');
   return {
     goal: body.goal.slice(0, 2000),
     history: Array.isArray(body.history) ? body.history.slice(-60).map(String) : [],
@@ -82,7 +100,39 @@ function stepInput(body) {
     display: { bounds: display.bounds, size: display.size },
     imageSize: body.imageSize || display.size,
     openApps: Array.isArray(body.openApps) ? body.openApps.slice(0, 40) : [],
-    jpeg: Buffer.from(body.jpeg, 'base64'),
+    auto: body.auto === true,
+    jpeg: body.jpeg ? Buffer.from(body.jpeg, 'base64') : null,
+    audio,
+  };
+}
+
+// The explain request, checked the same way.
+function explainInput(body) {
+  const element = body && body.element;
+  if (!element || typeof element !== 'object') throw new HttpError(400, 'control missing');
+  if (body.jpeg != null && (typeof body.jpeg !== 'string' || !body.jpeg)) throw new HttpError(400, 'picture is not an image');
+  const spot = body.spot && ['x', 'y', 'w', 'h'].every((k) => Number.isFinite(body.spot[k])) ? body.spot : null;
+  return {
+    app: String(body.app || '').slice(0, 200),
+    title: String(body.title || '').slice(0, 300),
+    element: { name: String(element.name || '').slice(0, 200), type: String(element.type || '').slice(0, 40) },
+    nearby: Array.isArray(body.nearby) ? body.nearby.slice(0, 30).map((n) => String(n).slice(0, 80)) : [],
+    jpeg: body.jpeg ? Buffer.from(body.jpeg, 'base64') : null,
+    spot,
+    lang: /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(String(body.lang || '')) ? String(body.lang) : '',
+  };
+}
+
+// The build request: what to build and the files already in the folder (path and text only).
+function buildInput(body) {
+  if (!body || typeof body.request !== 'string' || !body.request.trim()) throw new HttpError(400, 'what to build is missing');
+  const files = Array.isArray(body.files) ? body.files.slice(0, 200)
+    .filter((f) => f && typeof f.path === 'string' && typeof f.content === 'string')
+    .map((f) => ({ path: f.path.slice(0, 200), content: f.content.slice(0, 400 * 1024) })) : [];
+  return {
+    request: body.request.slice(0, 4000),
+    files,
+    lang: /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/i.test(String(body.lang || '')) ? String(body.lang) : '',
   };
 }
 
@@ -97,7 +147,7 @@ function createServer({
   async function handle(request) {
     const url = new URL(request.url, 'http://lefty');
     if (request.method === 'GET' && url.pathname === '/health') return { ok: true, brain: brain.ready() ? brain.label() : 'no AI key' };
-    if (request.method !== 'POST' || !['/v1/step', '/v1/check-code', '/v1/warmup'].includes(url.pathname)) throw new HttpError(404, 'not found');
+    if (request.method !== 'POST' || !['/v1/step', '/v1/check-code', '/v1/explain', '/v1/build', '/v1/warmup'].includes(url.pathname)) throw new HttpError(404, 'not found');
     if (token) {
       const sent = String(request.headers.authorization || '').replace(/^Bearer\s+/i, '');
       const same = sent.length === token.length && crypto.timingSafeEqual(Buffer.from(sent), Buffer.from(token));
@@ -120,6 +170,14 @@ function createServer({
           goal: String(body.goal || '').slice(0, 2000), hint: String(body.hint || '').slice(0, 300),
         });
         return { ok: true, ...result };
+      }
+      if (url.pathname === '/v1/explain') {
+        const { text, risky } = await brain.explain(explainInput(body));
+        return { ok: true, text, risky };
+      }
+      if (url.pathname === '/v1/build') {
+        const result = await brain.buildProject(buildInput(body));
+        return { ok: true, files: result.files, summary: result.summary, run: result.run };
       }
       const step = await brain.nextStep(stepInput(body));
       return { ok: true, ...step };
@@ -161,4 +219,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, createLimiter, stepInput };
+module.exports = { createServer, createLimiter, stepInput, explainInput, buildInput };

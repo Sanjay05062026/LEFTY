@@ -6,7 +6,8 @@ const fs = require('fs');
 const path = require('path');
 
 const WINDIR = process.env.WINDIR || 'C:\\Windows';
-const NATIVE_DIR = path.join(__dirname, '..', 'native');
+// In the installed app the helper sits beside the app archive (app.asar.unpacked), where it can be run and rebuilt.
+const NATIVE_DIR = path.join(__dirname, '..', 'native').replace(/app\.asar(?=[\\/])/, 'app.asar.unpacked');
 const BIN = path.join(NATIVE_DIR, 'bin');
 const SOURCE = path.join(NATIVE_DIR, 'uia-helper.cs');
 const TLBGEN_SOURCE = path.join(NATIVE_DIR, 'tlbgen.cs');
@@ -72,7 +73,7 @@ function onLine(line, markReady) {
   pending.delete(message.id);
   clearTimeout(request.timer);
   if (message.ok) request.resolve(message);
-  else request.reject(new Error(message.error || 'helper error'));
+  else request.reject(Object.assign(new Error(message.error || 'helper error'), { reply: message }));
 }
 
 // leftyPid: the process that owns Lefty's own windows, so Lefty never reads himself.
@@ -142,9 +143,44 @@ function caret(hwnd) {
 }
 
 // Presses keys in that window, which must be in front: ['ctrl+g', 'text:12:1', 'enter', 'wait:100'].
-// Only for actions the user asked Lefty to do (reading or fixing their code).
-function keys(hwnd, list) {
-  return request({ cmd: 'keys', hwnd, keys: list });
+// Only for actions the user asked Lefty to do (reading or fixing their code, Do it mode). anyAppWindow: the keys may
+// also go to one of the app's menus or dialogs in front.
+function keys(hwnd, list, { anyAppWindow = false } = {}) {
+  return request({ cmd: 'keys', hwnd, keys: list, anyAppWindow });
+}
+
+// Do it mode. Physical pixels. Each refuses (rejects, error.message says why) when the point isn't the app's:
+// 'covered' (another window is in the way), 'lefty' (Lefty's own bubble), 'not-front' (Windows won't bring the app
+// forward), 'moved' (the thing there isn't named expect; error.reply.found says what is), 'password' (typing).
+function click(hwnd, { x, y, button = 'left', count = 1, expect = '' }) {
+  return request({ cmd: 'click', hwnd, x: Math.round(x), y: Math.round(y), button, count, expect });
+}
+
+function type(hwnd, text) {
+  return request({ cmd: 'type', hwnd, text: String(text) });
+}
+
+// What's under a point (physical pixels): { name, type }. Asked before Lefty clicks a spot the AI guessed.
+// clickable: the control a person clicking there means, plus the window there ("What does this do?"):
+// { name, type, rect, password, process, title, lefty, windowRect }.
+function peek({ x, y }, { clickable = false } = {}) {
+  return request({ cmd: 'peek', x: Math.round(x), y: Math.round(y), ...(clickable ? { clickable: true } : {}) });
+}
+
+// Focus mode: the window in front: { hwnd, root (the window that owns it), title, process, lefty, shell }.
+function front() {
+  return request({ cmd: 'front' });
+}
+
+// Focus mode: asks a window to close, as its X button does (the app may still ask to save), or minimizes it.
+function closeWindow(hwnd, { minimize = false } = {}) {
+  if (!hwnd) return Promise.reject(new Error('no window')); // never the helper's default window
+  return request({ cmd: 'close', hwnd, how: minimize ? 'minimize' : 'close' });
+}
+
+// notches: negative scrolls down, positive up.
+function scroll(hwnd, { x, y, notches = -3 }) {
+  return request({ cmd: 'scroll', hwnd, x: Math.round(x), y: Math.round(y), notches });
 }
 
 // Is this window fullscreen (covers its monitor with no title bar)? Defaults to the window in front.
@@ -189,4 +225,4 @@ function stop() {
   ready = null;
 }
 
-module.exports = { start, snapshot, focusApp, windows, caret, keys, screenMode, onScreenMode, appName, stop };
+module.exports = { start, snapshot, focusApp, windows, caret, keys, click, type, scroll, peek, front, closeWindow, screenMode, onScreenMode, appName, stop };

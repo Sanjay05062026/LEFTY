@@ -16,6 +16,11 @@ const STOP_WORDS = new Set([
   'color', 'colour', 'link', 'area', 'bar', 'panel', 'section', 'ctrl', 'shift', 'alt', 'top', 'left', 'right',
 ]);
 const INPUT_TYPES = new Set(['Edit', 'ComboBox']);
+// Words that name a kind of element: a step saying "Close tab" is about a tab, whatever its name.
+const KIND_WORDS = {
+  tab: ['TabItem'], button: ['Button', 'SplitButton'], menu: ['MenuItem'], box: ['Edit', 'ComboBox'], field: ['Edit', 'ComboBox'],
+  link: ['Hyperlink'], checkbox: ['CheckBox'], item: ['ListItem', 'TreeItem', 'MenuItem', 'DataItem'], option: ['RadioButton', 'ListItem', 'MenuItem'],
+};
 const BIG_AREA = 0.15; // a "container" covering this much of the screen is no target (a whole page, a canvas)
 
 // Words of a name or step, lowercased, without keyboard hints in brackets: "Extensions (Ctrl+Shift+X)" -> extensions.
@@ -42,9 +47,15 @@ function fitScore(element, keys) {
   return 0;
 }
 
+// How many of the step's key words the element's name has.
+const sharedKeys = (element, keys) => {
+  const name = new Set(words(element.name).filter((w) => !STOP_WORDS.has(w)));
+  return keys.filter((k) => name.has(k)).length;
+};
+
 const centre = (rect) => ({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
 const distance = (a, b) => Math.hypot(centre(a).x - centre(b).x, centre(a).y - centre(b).y);
-const asTarget = (el, from) => ({ name: el.name, type: el.type, rect: el.rect, snappedFrom: from });
+const asTarget = (el, from) => ({ name: el.name, type: el.type, rect: el.rect, snappedFrom: from, ...(el.guessed ? { guessed: true } : {}) });
 
 // target: { name, type, rect } as the AI chose it (type "Spot" = a guessed point), or null.
 // screen: { w, h } of the display, to skip huge containers. Returns the target to point at.
@@ -52,7 +63,9 @@ function snapTarget(target, { instruction, text, action, elements, screen }) {
   if (!target || !target.rect) return target;
   const keys = keyWords(instruction, text);
   const area = screen ? screen.w * screen.h : Infinity;
-  const pool = elements.filter((el) => el.rect && el.rect.w * el.rect.h < area * BIG_AREA && (action !== 'type' || INPUT_TYPES.has(el.type)));
+  // Never onto the window's own Close / Minimize / Maximize buttons (main marks them titleBar): "Close the tab" must
+  // not become "close the app".
+  const pool = elements.filter((el) => el.rect && !el.titleBar && el.rect.w * el.rect.h < area * BIG_AREA && (action !== 'type' || INPUT_TYPES.has(el.type)));
   let best = null;
   let bestScore = 0;
   let ambiguous = false; // two different things fit equally ("Install on Python": an Install button, the Python tab)
@@ -71,7 +84,15 @@ function snapTarget(target, { instruction, text, action, elements, screen }) {
   }
   const guessed = target.type === 'Spot';
   const current = guessed ? 0 : fitScore(target, keys);
-  if (best && !ambiguous && bestScore > current && (guessed || current === 0)) return asTarget(best, guessed ? 'a guessed spot' : `${target.type} "${target.name}"`);
+  // A pick that shares some of the step's words is about the right thing ("Close scratch tab" -> the "scratch" tab): it
+  // only gives way to an element with more of them ("Search Extensions" over "Search files by name"), never to one that
+  // merely fits by having a short name ("Close").
+  // Nor when the step names the pick's kind and the other thing is another kind ("Close tab" on a tab is not "Close
+  // replace options").
+  const kinds = words(instruction).flatMap((w) => KIND_WORDS[w] || []);
+  const kindKept = !guessed && kinds.includes(target.type) && best && !kinds.includes(best.type);
+  const better = guessed || (current === 0 && !kindKept && (!sharedKeys(target, keys) || (best && sharedKeys(best, keys) > sharedKeys(target, keys))));
+  if (best && !ambiguous && bestScore > current && better) return asTarget(best, guessed ? 'a guessed spot' : `${target.type} "${target.name}"`);
   // No name fits. A step that names nothing ("Click here") takes the smallest element the guess landed inside; one
   // that names something ("Pick red") does not: landing on another thing (Paint's pinkish Opacity slider) is a miss.
   if (guessed && !keys.length) {
