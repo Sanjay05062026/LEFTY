@@ -390,7 +390,7 @@ async function openApp(decision) {
   if (autoOn()) { // Do it mode: opening an app is harmless, so Lefty just does it
     setStepTag('', `Opening ${found.app}…`);
     api.log(`do it: opening ${found.app}`);
-    const launched = await api.launchApp({ app: found.app, appId: found.appId });
+    const launched = await api.launchApp({ app: found.app, appId: found.appId, want: decision.app });
     if (job !== thisJob) return;
     if (launched.ok) appOpened(thisJob, decision, launched.app);
     else stopGuide(`${found.app} didn't open. Try opening it yourself and call me again.`);
@@ -408,7 +408,7 @@ async function openApp(decision) {
         tuckBubble(true);
         setStepTag('', `Opening ${found.app}…`);
         api.log(`user said yes: opening ${found.app}`);
-        const launched = await api.launchApp({ app: found.app, appId: found.appId });
+        const launched = await api.launchApp({ app: found.app, appId: found.appId, want: decision.app });
         if (job !== thisJob) return;
         if (launched.ok) appOpened(thisJob, decision, launched.app);
         else stopGuide(`${found.app} didn't open. Try opening it yourself and call me again.`);
@@ -436,6 +436,7 @@ function appOpened(thisJob, decision, app) {
 const modeChip = document.getElementById('modechip');
 const AUTO_SHOW_MS = 600;        // the glide to the target, before the click
 const AUTO_IDLE_MS = 1500;       // after the user's own turn, how long they must have stopped before Lefty acts
+const AUTO_IDLE_WAIT_MAX_MS = 8000; // ...but he gets on with it after this, however busy they stay
 const AUTO_MAX_SAME = 3;         // the same click this many times with nothing moving on: it isn't working
 const AUTO_GRACE_MS = 600;       // the key that sent the goal may arrive just after the job starts: not a stop
 const AUTO_MAX_FAILS = 2;        // failed tries at one step before the user is asked to do it
@@ -446,6 +447,15 @@ const autoOn = () => settings.mode === 'auto';
 // Lefty is working for the user right now (thinking or acting): their input means "stop". Once a step was handed to
 // the user, their input is theirs (typing a file name moves the guide on after the first letter) until Lefty acts again.
 const autoWorking = () => Boolean(job) && autoOn() && !job.paused && !job.yourTurn && !job.handedOver && !job.ghost;
+
+// Main needs to know, so a tap of Ctrl+Space shows the Stop button instead of hiding Lefty mid-task.
+let toldWorking = false;
+function tellWorking() {
+  const working = autoWorking();
+  if (working === toldWorking) return;
+  toldWorking = working;
+  api.setWorking(working);
+}
 
 const YOUR_TURN = {
   choice: 'Your turn: ',
@@ -501,11 +511,12 @@ speakButton.addEventListener('click', () => { api.setSettings({ speak: settings.
 
 // The chip beside the step tag: "Do it for me" in Learn mode, "Stop" while Lefty works.
 function updateModeChip() {
+  tellWorking();
   const showing = Boolean(job) && !job.paused && !job.ghost && !job.doctor && !job.coding && stepTag.classList.contains('show') && !stepTag.classList.contains('done');
   modeChip.classList.toggle('show', showing);
   if (!showing) return;
   const auto = autoOn();
-  modeChip.textContent = auto ? '■ Stop (Esc)' : 'Do it for me';
+  modeChip.textContent = auto ? '■ Stop' : 'Do it for me';
   modeChip.classList.toggle('stop', auto);
   placeModeChip();
 }
@@ -556,7 +567,10 @@ async function autoStep(decision) {
   job.autoBusy = true;
   try {
     await sleep(AUTO_SHOW_MS);
-    while (still() && Date.now() - lastUserInputAt < AUTO_IDLE_MS) await sleep(200); // the user is still at it
+    // Wait for a gap in what the user is doing, so Lefty's click doesn't land mid-sentence - but only for so
+    // long. Someone working steadily in another window must not leave him waiting for ever.
+    const waitUntil = Date.now() + AUTO_IDLE_WAIT_MAX_MS;
+    while (still() && Date.now() - lastUserInputAt < AUTO_IDLE_MS && Date.now() < waitUntil) await sleep(200);
     if (!still()) return;
     const current = job.decision; // the latest read of the same step (its target may have moved)
     if (current.target && current.target.type === 'Spot' && (plan.act === 'click' || plan.act === 'type')) {
@@ -719,12 +733,30 @@ async function writeCode(decision) {
   finish({ done: true, message: 'Done! I wrote the code for you. Run it to see it work.' });
 }
 
+// Ctrl+Space while Lefty is working: his chat comes back so the Stop button can be reached. The task keeps
+// going meanwhile - only Stop ends it.
+api.onReveal(() => {
+  if (!job) return;
+  tuckBubble(false);
+  api.setInteractive(true); // the buttons have to be clickable, even mid-task
+  updateModeChip();
+  if (!autoWorking()) return;
+  const thisJob = job;
+  api.log('chat brought back mid-task');
+  addChoices("I'm still on it. Shall I carry on, or stop?", [
+    { label: '▶ Carry on', primary: true, pick: () => { if (job === thisJob) { tuckBubble(true); api.setInteractive(false); } } },
+    { label: '■ Stop', pick: () => { if (job === thisJob) stopAuto('button'); } },
+  ]);
+});
+
 // Main says the user clicked, turned the wheel or pressed a key (not which key, except Esc).
-api.onInput(({ kind, escape }) => {
+// Working on your own means working through this: using the PC while Lefty works no longer stops him, and
+// neither does Esc. He only waits for a gap in what you are doing (AUTO_IDLE_MS below) so his click doesn't
+// land in the middle of your typing. The one way to stop him is Ctrl+Space, which brings his chat back with a
+// Stop button on it.
+api.onInput(({ kind }) => {
   if (kind === 'key' && document.hasFocus()) return; // typed into Lefty's own chat box, not the app
   lastUserInputAt = Date.now();
-  if (!autoWorking() || Date.now() - job.startedAt < AUTO_GRACE_MS) return;
-  stopAuto(escape ? 'esc' : kind);
 });
 
 /* ---------- Ghost code ----------
@@ -1513,7 +1545,7 @@ document.addEventListener('keydown', (event) => {
   if (picking) { endPick(); return; }
   if (listening) { stopListening(false); return; }
   if (tip) { hideTip(); return; }
-  if (autoWorking()) stopAuto('esc'); // the first Esc stops Lefty working; the next one closes him
+  if (autoWorking()) return; // Esc never stops him mid-task, and never hides the Stop button: that's Ctrl+Space
   else api.requestHide();
 });
 

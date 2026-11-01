@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('lefty', {
   autoScroll: (request) => ipcRenderer.invoke('auto:scroll', request),
   autoPeek: (rect) => ipcRenderer.invoke('auto:peek', { rect }),
   autoCode: (code) => ipcRenderer.invoke('auto:code', { code }),
+  onReveal: (callback) => ipcRenderer.on('lefty:reveal', () => callback()),
+  setWorking: (working) => ipcRenderer.send('auto:working', working),
   onInput: (callback) => ipcRenderer.on('lefty:input', (_event, data) => callback(data)),
   // "What does this do?": F1 over a control (onExplain gets the mouse point), or a pick from the bubble
   onExplain: (callback) => ipcRenderer.on('lefty:explain', (_event, point) => callback(point)),

@@ -12,14 +12,31 @@ const ALIASES = {
 
 const words = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9+#]+/g, ' ').trim();
 
+// Start menu entries carry a version that no window title ever shows: "PyCharm 2026.2.1" is the app people
+// installed, but its window says "Welcome to PyCharm". Dropping the trailing version, edition and bitness is
+// what lets Lefty recognise the window of an app he has just opened.
+const VERSION_WORD = /^(\d+[\d.]*|v\d[\d.]*|x64|x86|32|64|bit|32bit|64bit|community|professional|edition|preview|beta|insiders|lts)$/;
+function baseName(name) {
+  const parts = words(name).split(' ');
+  while (parts.length > 1 && VERSION_WORD.test(parts[parts.length - 1])) parts.pop();
+  return parts.join(' ');
+}
+
 function canonical(name) {
   const n = words(name).replace(/\b(the|app|application|program)\b/g, ' ').replace(/\s+/g, ' ').trim();
   return ALIASES[n] || n;
 }
 
 // How well a window matches the app name: 0 = not at all. appName(window) is eyes.appName ("VS Code").
+// An app named with its version ("PyCharm 2026.2.1") is tried again without it, so the window it opened counts.
 function windowScore(name, window, appName) {
-  const want = canonical(name);
+  const full = scoreFor(canonical(name), window, appName);
+  if (full) return full;
+  const base = canonical(baseName(name));
+  return base && base !== canonical(name) ? scoreFor(base, window, appName) : 0;
+}
+
+function scoreFor(want, window, appName) {
   if (!want) return 0;
   const label = canonical(appName ? appName(window) : '');
   const title = words(window.title);
@@ -56,4 +73,4 @@ function findStartApp(name, apps) {
     || null;
 }
 
-module.exports = { canonical, windowScore, findWindow, findStartApp };
+module.exports = { canonical, baseName, windowScore, findWindow, findStartApp };

@@ -25,6 +25,7 @@ const ICON = path.join(__dirname, '..', 'assets', 'lefty-icon.png');
 let mainWindow = null;
 let overlayWindow = null;
 let overlayVisible = false;
+let autoWorking = false;        // Lefty is clicking and typing his way through a task right now
 let hideTimer = null;
 let shortcutEnabled = false;  // someone is logged in
 let fullscreenApp = null;      // name of the fullscreen app in front (a game), while there is one
@@ -97,8 +98,17 @@ function releaseShortcut() {
   shortcutHeld = null;
   if (!held) return;
   clearTimeout(held.timer);
-  if (held.talking) overlayWindow.webContents.send('voice:hold', { on: false });
-  else if (!held.opened) hideLefty(); // a tap on an open Lefty closes him
+  if (held.talking) { overlayWindow.webContents.send('voice:hold', { on: false }); return; }
+  if (held.opened) return;
+  // While Lefty is working on his own, Ctrl+Space is the one way to stop him, so a tap brings his chat back
+  // with the Stop button on it instead of hiding him. Hiding would leave the task running with nothing to press.
+  if (autoWorking) {
+    overlayWindow.webContents.send('lefty:reveal');
+    overlayWindow.moveTop();
+    console.log('[lefty] Ctrl+Space while working: showing the Stop button');
+    return;
+  }
+  hideLefty(); // a tap on an open Lefty closes him
 }
 
 // Holds Ctrl+Space exactly while someone is logged in and no fullscreen app is in front.
@@ -471,6 +481,8 @@ ipcMain.on('overlay:pick', (_event, on) => {
   else syncInteractive();
 });
 ipcMain.on('overlay:target', (_event, rect) => { pointTarget = rect || null; });
+// True while Lefty is carrying a task out himself, so Ctrl+Space shows the Stop button instead of hiding him.
+ipcMain.on('auto:working', (_event, working) => { autoWorking = Boolean(working); });
 // Menus and dropdowns are always-on-top windows too, and the newest one is drawn above Lefty.
 // Whenever Lefty points or warns, he steps back on top (without taking focus, so the menu stays open).
 ipcMain.on('overlay:raise', () => {
@@ -1304,7 +1316,14 @@ ipcMain.handle('build:open', async (_event, { folder: wanted, how } = {}) => {
 /* ---------- The app a goal is about ----------
    "Download the Python extension in VS Code" asked from the desktop: Lefty switches to VS Code if it's open
    (restoring it if minimized), or finds it in the Start menu so the overlay can ask "Open it?" and launch it. */
-const LAUNCH_WAIT_MS = 20000;
+/* How long to wait for an app to open. A light app is up in a second; PyCharm, Visual Studio or Photoshop on a
+   cold start can take a minute, and giving up on them was Lefty's own impatience, not the app's fault. So the
+   wait is long, and it is based on progress: as soon as the app puts anything on screen (a splash, a loading
+   window) the clock is given more room, because something is clearly happening. */
+const LAUNCH_WAIT_MS = 90000;
+const LAUNCH_AFTER_SIGN_MS = 45000; // more time once the app has shown something
+const SETTLE_TRIES = 12;            // how many looks to give a window that is still drawing itself
+const SETTLE_EVERY_MS = 400;
 let startApps = null; // Get-StartApps: [{ Name, AppID }], loaded once in the background
 
 function loadStartApps() {
@@ -1339,7 +1358,12 @@ ipcMain.handle('lefty:open-app', async (_event, name) => {
   console.log(`[lefty] looking for ${name} among ${windows.length} open windows: ${windows.map((w) => eyes.appName(w)).join(', ')}`);
   const found = apps.findWindow(name, windows, eyes.appName);
   if (found) {
-    if (!SELFTEST) await focusApp(found.hwnd).catch(() => {});
+    if (!SELFTEST) {
+      await focusApp(found.hwnd).catch(() => {});
+      // A window coming back from the taskbar needs a moment to redraw; reading it mid-restore shows almost
+      // nothing, and Lefty would plan the next step from an empty screen.
+      if (found.minimized) await settle(found.hwnd, eyes.appName(found));
+    }
     console.log(`[lefty] switched to ${eyes.appName(found)} ("${found.title}")`);
     return { ok: true, switched: true, app: eyes.appName(found) };
   }
@@ -1348,22 +1372,58 @@ ipcMain.handle('lefty:open-app', async (_event, name) => {
   return entry ? { ok: false, launchable: true, app: entry.Name, appId: entry.AppID } : { ok: false, launchable: false, app: name };
 });
 
-ipcMain.handle('lefty:launch-app', async (_event, { app: name, appId }) => {
+// A window that is still drawing itself (a splash, an empty frame, a project loading) is no use to Lefty: he
+// would read three buttons and plan from them. So after an app opens he keeps looking until what it shows stops
+// changing, and only then says it is ready.
+async function settle(hwnd, label) {
+  let last = -1;
+  let same = 0;
+  for (let i = 0; i < SETTLE_TRIES; i += 1) {
+    await sleep(SETTLE_EVERY_MS);
+    const seen = await readApp(hwnd);
+    const count = seen.ok ? seen.elements.length : -1;
+    if (count > 0 && count === last) {
+      same += 1;
+      if (same >= 2) { // the same screen three looks running: it has finished drawing
+        console.log(`[lefty] ${label} has settled (${count} things on screen)`);
+        return;
+      }
+    } else {
+      same = 0;
+    }
+    last = count;
+  }
+  console.log(`[lefty] ${label} is still changing; carrying on anyway`);
+}
+
+ipcMain.handle('lefty:launch-app', async (_event, { app: name, appId, want }) => {
   if (SELFTEST || !appId) return { ok: false };
   spawn('explorer.exe', [`shell:AppsFolder\\${appId}`], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   console.log(`[lefty] opening ${name}`);
-  const end = Date.now() + LAUNCH_WAIT_MS;
+  // The name the user (or the brain) used is the one a window is likely to carry: the Start menu's own name
+  // often has a version in it that no window title ever shows.
+  const names = [...new Set([want, name, apps.baseName(name)].filter(Boolean))];
+  const before = (await openWindows()).length;
+  let end = Date.now() + LAUNCH_WAIT_MS;
+  let noticed = false;
   while (Date.now() < end) {
     await sleep(500);
-    const found = apps.findWindow(name, await openWindows(), eyes.appName);
+    const windows = await openWindows();
+    const found = names.map((n) => apps.findWindow(n, windows, eyes.appName)).find(Boolean);
     if (found) {
-      await sleep(1000); // let the app draw its window before Lefty looks at it
       await focusApp(found.hwnd).catch(() => {});
+      await settle(found.hwnd, eyes.appName(found));
       console.log(`[lefty] ${name} is open ("${found.title}")`);
       return { ok: true, app: eyes.appName(found) };
     }
+    // Something new appeared (a splash screen, a loading window): the app is coming, so give it longer.
+    if (!noticed && windows.length > before) {
+      noticed = true;
+      end = Math.max(end, Date.now() + LAUNCH_AFTER_SIGN_MS);
+      console.log(`[lefty] ${name} is starting up; waiting longer`);
+    }
   }
-  console.log(`[lefty] ${name} did not open within ${LAUNCH_WAIT_MS / 1000} s`);
+  console.log(`[lefty] ${name} did not open within ${Math.round(LAUNCH_WAIT_MS / 1000)} s`);
   return { ok: false };
 });
 
