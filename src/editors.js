@@ -27,6 +27,7 @@
       folders: { code: 'Code', 'code - insiders': 'Code - Insiders', cursor: 'Cursor', windsurf: 'Windsurf', vscodium: 'VSCodium', trae: 'Trae' },
       titles: [/\s[-–—]\s(Visual Studio Code|Cursor|Windsurf|VSCodium|Trae)$/],
       goto: 'line-col',   // Ctrl+G, then "12:5"
+      newFile: ['ctrl+n'], // a blank untitled tab
       font: { fontFamily: "Consolas, 'Courier New', monospace", fontSize: 14, lineHeight: 19 },
     },
     {
@@ -35,6 +36,7 @@
       processes: ['notepad'],
       titles: [/\s[-–—]\sNotepad$/],
       goto: 'line',       // Ctrl+G opens a dialog with a line box
+      newFile: ['ctrl+n'],
       font: { fontFamily: "Consolas, 'Courier New', monospace", fontSize: 11, lineHeight: 15 },
     },
     {
@@ -43,6 +45,7 @@
       processes: ['notepad++'],
       titles: [/\s[-–—]\sNotepad\+\+$/],
       goto: 'line',
+      newFile: ['ctrl+n'],
       font: { fontFamily: "'Courier New', Consolas, monospace", fontSize: 11, lineHeight: 14 },
     },
     {
@@ -51,6 +54,7 @@
       processes: ['sublime_text'],
       titles: [/\s[-–—]\sSublime Text(\s|$)/],
       goto: 'line',       // Ctrl+G opens the ":" prompt
+      newFile: ['ctrl+n'],
       font: { fontFamily: "Consolas, 'Courier New', monospace", fontSize: 10, lineHeight: 14 },
     },
     {
@@ -67,6 +71,7 @@
       },
       titles: [/\s[-–—]\s(PyCharm|IntelliJ IDEA|WebStorm|PhpStorm|CLion|Rider|RubyMine|GoLand|DataGrip|Android Studio)(\s|$)/],
       goto: 'line-col',   // Ctrl+G, then "12:5"
+      newFile: null,      // Ctrl+N here is "go to class"; a new file needs the project tree
       font: { fontFamily: "'JetBrains Mono', Consolas, monospace", fontSize: 13, lineHeight: 16 },
       // The JetBrains IDEs only answer UI Automation with their accessibility bridge switched on. When it is off
       // Lefty can't see the cursor, so the code goes in the chat instead.
@@ -78,6 +83,7 @@
       processes: ['devenv'],
       titles: [/\s[-–—]\sMicrosoft Visual Studio(\s|$)/],
       goto: 'line',
+      newFile: null,      // Ctrl+N opens a template picker, not a blank file
       font: { fontFamily: "'Cascadia Mono', Consolas, monospace", fontSize: 10, lineHeight: 14 },
     },
   ];
@@ -89,6 +95,7 @@
     processes: [],
     titles: [],
     goto: 'line',
+    newFile: ['ctrl+n'], // near enough universal in a text editor, and the worst case is a spare tab
     font: { fontFamily: "Consolas, 'Courier New', monospace", fontSize: 12, lineHeight: 16 },
   };
 
@@ -139,6 +146,52 @@
     return ['ctrl+g', 'wait:150', `text:${where}`, 'wait:80', 'enter', 'wait:150'];
   }
 
+  // The keys that open a blank file, or null where this editor has none that is safe to press. Code Lefty writes
+  // himself goes in a file of its own: the file the user happens to have open is theirs, and 800 lines of someone's
+  // SQL is no place for a Python function. Where there is no such key, he does not write at all.
+  function newFileKeys(process) {
+    const editor = findOrGeneric(process);
+    return editor.newFile ? [...editor.newFile, 'wait:400'] : null;
+  }
+
+  const canNewFile = (process) => Boolean(findOrGeneric(process).newFile);
+
+  // A name for the file, from what the code is: the brain's suggestion when it gave one, else the goal's own
+  // words, else "lefty-code". Only letters, digits, dash and underscore survive, so it is always a usable name.
+  const EXTENSIONS = {
+    python: 'py', py: 'py', javascript: 'js', js: 'js', typescript: 'ts', ts: 'ts', java: 'java', c: 'c',
+    'c++': 'cpp', cpp: 'cpp', 'c#': 'cs', csharp: 'cs', go: 'go', rust: 'rs', rs: 'rs', ruby: 'rb', php: 'php',
+    sql: 'sql', html: 'html', css: 'css', json: 'json', shell: 'sh', bash: 'sh', kotlin: 'kt', swift: 'swift',
+    r: 'r', scala: 'scala', dart: 'dart', lua: 'lua', perl: 'pl', text: 'txt',
+  };
+
+  const extensionFor = (lang) => EXTENSIONS[String(lang || '').trim().toLowerCase()] || '';
+
+  // Words that say what to do, not what the thing is: "open pycharm and write ghost code for linear search in
+  // python" is a file called linear-search.py.
+  const NOT_A_NAME = new Set([
+    'a', 'an', 'the', 'and', 'or', 'for', 'in', 'into', 'to', 'of', 'me', 'my', 'please', 'some', 'with', 'using',
+    'open', 'write', 'make', 'create', 'build', 'give', 'add', 'show', 'do', 'new', 'file', 'code', 'ghost',
+    'program', 'script', 'function', 'algorithm', 'implement', 'implementation', 'example',
+    'vscode', 'vs', 'ide', 'editor', 'npp',
+    ...Object.keys(EXTENSIONS),
+    // and the editors' own names: "open pycharm and ..." is about where, not about what
+    ...EDITORS.flatMap((editor) => [
+      ...editor.processes,
+      ...editor.label.toLowerCase().split(/\s+/),
+      ...Object.values(editor.labels || {}).flatMap((label) => label.toLowerCase().split(/\s+/)),
+    ]),
+  ]);
+
+  function fileName(suggested, { lang = '', fallback = '' } = {}) {
+    const given = String(suggested || '').trim().split(/[\\/]/).pop();
+    if (/^[\w.-]+\.[A-Za-z0-9]+$/.test(given)) return given; // the brain already named it
+    const words = (given || fallback || '').toLowerCase().match(/[a-z0-9]+/g) || [];
+    const kept = words.filter((w) => !NOT_A_NAME.has(w));
+    const stem = (kept.length ? kept : words).slice(0, 3).join('-').slice(0, 40) || 'lefty-code';
+    return `${stem}.${extensionFor(lang) || 'txt'}`;
+  }
+
   // Whether the cursor can be put on an exact column, or only on the line (the editor's Go To box takes a line).
   const canGotoColumn = (process) => findOrGeneric(process).goto === 'line-col';
 
@@ -169,7 +222,8 @@
     };
   }
 
-  const api = { find, findOrGeneric, fromTitle, fromAppName, isCodeEditor, describe, isKnown, gotoKeys, canGotoColumn, settingsFolder, fontOf, EDITORS, GENERIC };
+  const api = { find, findOrGeneric, fromTitle, fromAppName, isCodeEditor, describe, isKnown, gotoKeys, canGotoColumn,
+    newFileKeys, canNewFile, fileName, extensionFor, settingsFolder, fontOf, EDITORS, GENERIC };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.LeftyEditors = api;
 })(this);

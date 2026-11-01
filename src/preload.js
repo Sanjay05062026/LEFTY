@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('lefty', {
   autoKeys: (keys) => ipcRenderer.invoke('auto:keys', { keys }),
   autoScroll: (request) => ipcRenderer.invoke('auto:scroll', request),
   autoPeek: (rect) => ipcRenderer.invoke('auto:peek', { rect }),
-  autoCode: (code) => ipcRenderer.invoke('auto:code', { code }),
+  autoCode: (request) => ipcRenderer.invoke('auto:code', request),
   onReveal: (callback) => ipcRenderer.on('lefty:reveal', () => callback()),
   setWorking: (working) => ipcRenderer.send('auto:working', working),
   onInput: (callback) => ipcRenderer.on('lefty:input', (_event, data) => callback(data)),

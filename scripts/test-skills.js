@@ -263,6 +263,18 @@ async function aiChecks() {
   decide(codeJob, editor); await tick();
   const ghostStep = decide(codeJob, editor);
   check(ghostStep.kind === 'code' && ghostStep.code === 'class Node:\n    pass' && ghostStep.label === 'Type along with me 👻' && !ghostStep.target, 'ai: code to write is a ghost-code step');
+  // The code is going into a file of its own, so the step carries the name that file will have.
+  check(ghostStep.file === 'single-linked-list.txt', 'ai: a code step names the file it belongs in');
+
+  const named = newJob(aiSkill('write a linear search', () => Promise.resolve({ ok: true, status: 'step', action: 'write_code',
+    instruction: 'Type along', code: 'def f():\n    pass', file: 'linear_search.py', lang: 'python', target: null })));
+  decide(named, editor); await tick();
+  check(decide(named, editor).file === 'linear_search.py', "ai: the brain's own file name is used as given");
+
+  const unnamed = newJob(aiSkill('write bubble sort in python', () => Promise.resolve({ ok: true, status: 'step', action: 'write_code',
+    instruction: 'Type along', code: 'def f():\n    pass', lang: 'python', target: null })));
+  decide(unnamed, editor); await tick();
+  check(decide(unnamed, editor).file === 'bubble-sort.py', 'ai: no file name from the brain: the goal and the language name it');
   noteEvent(codeJob, { type: 'key', combo: 'Enter', decisionId: ghostStep.id });
   noteEvent(codeJob, { type: 'key', combo: 'Escape', decisionId: ghostStep.id });
   noteEvent(codeJob, { type: 'click', hit: false, point: { x: 5, y: 5 }, elements: [], decisionId: ghostStep.id });
