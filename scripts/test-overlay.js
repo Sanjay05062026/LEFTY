@@ -115,5 +115,28 @@ check(/won't write into the file you have open/.test(overlay), 'and it says why,
 check(/a new file, \$\{result\.file\}/.test(overlay), 'when it worked, he says which file the code is in');
 check(/save it as/.test(overlay), 'when it could not be saved, he says to save it');
 
+// --- deleting Lefty actually gets rid of him ---
+// He runs as administrator, so Windows refuses to let the uninstaller close him: it stopped at "Lefty cannot
+// be closed. Please close it manually and click Retry to continue." He closes himself instead.
+const nsh = read('build/installer.nsh');
+check(/customUnInit/.test(nsh), 'the uninstaller runs something of ours before it checks whether Lefty is running');
+check(/customInit/.test(nsh), 'and so does the installer, for installing over a running copy');
+check(/\$APPDATA\\lefty\\uninstalling/.test(nsh), 'it leaves the note where Lefty is looking');
+check(/Sleep \d{4}/.test(nsh), 'and waits for him to act on it');
+check(/taskkill/.test(nsh), 'a Lefty not running as administrator is closed the ordinary way too');
+check(/Delete "\$APPDATA\\lefty\\uninstalling"/.test(nsh), 'the note is cleared up afterwards');
+
+const watch = main.slice(main.indexOf('function watchForUninstall'), main.indexOf('/* ---------- Ctrl + Space'));
+check(watch.length > 100, 'Lefty watches for that note');
+check(/unlinkSync\(UNINSTALL_NOTE\)/.test(watch), 'a note from a cancelled uninstall is thrown away at startup');
+check(watch.indexOf('unlinkSync') < watch.indexOf('setInterval'), 'and thrown away before the watching starts');
+check(/app\.exit\(0\)/.test(watch), 'seeing the note, he goes');
+check(/setLoginItemSettings\(\{ openAtLogin: false \}\)/.test(watch), 'and takes himself out of Start with Windows');
+check(/!fs\.existsSync\(process\.execPath\)/.test(watch), 'he also goes when his program file has been deleted');
+check(/app\.isPackaged/.test(watch), 'that check is only for an installed Lefty, never npm start');
+check(/clearInterval/.test(watch), 'the watch stops once it has fired');
+check(/watchForUninstall\(\)/.test(main.slice(main.indexOf('app.whenReady'))), 'the watch is started at startup');
+check(/SELFTEST\) watchForUninstall/.test(main), 'the self-test is not closed by it');
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nall overlay checks passed');
 process.exit(failed ? 1 : 0);

@@ -1,6 +1,6 @@
 {
   "name": "lefty",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Lefty: a friendly AI cursor that points you to the next step in any app.",
   "main": "src/main.js",
   "private": true,
@@ -21,12 +21,13 @@
     "test:apps": "node scripts/test-apps.js",
     "test:server": "node scripts/test-server.js",
     "selftest": "set LEFTY_SELFTEST=1&& electron .",
-    "test": "npm run test:match && npm run test:guard && npm run test:skills && npm run test:auto && npm run test:voice && npm run test:focus && npm run test:history && npm run test:editors && npm run test:ghost && npm run test:snap && npm run test:shortcut && npm run test:brain && npm run test:apps && npm run test:overlay && npm run test:server && npm run test:eyes && npm run selftest",
+    "test": "npm run test:match && npm run test:guard && npm run test:skills && npm run test:auto && npm run test:voice && npm run test:focus && npm run test:history && npm run test:editors && npm run test:ghost && npm run test:snap && npm run test:shortcut && npm run test:brain && npm run test:apps && npm run test:overlay && npm run test:icon && npm run test:server && npm run test:eyes && npm run selftest",
     "icon": "electron scripts/make-icon.js",
     "dist": "electron-builder --win nsis",
     "test:history": "node scripts/test-history.js",
     "test:editors": "node scripts/test-editors.js",
-    "test:overlay": "node scripts/test-overlay.js"
+    "test:overlay": "node scripts/test-overlay.js",
+    "test:icon": "node scripts/test-icon.js"
   },
   "devDependencies": {
     "electron": "33.2.1",
@@ -55,7 +56,7 @@
     "npmRebuild": false,
     "win": {
       "target": "nsis",
-      "icon": "build/icon.png",
+      "icon": "build/icon.ico",
       "requestedExecutionLevel": "requireAdministrator"
     },
     "nsis": {
@@ -65,7 +66,10 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Lefty",
       "runAfterFinish": true,
-      "artifactName": "Lefty-Setup-${version}.${ext}"
+      "artifactName": "Lefty-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "include": "build/installer.nsh"
     },
     "publish": null
   }
