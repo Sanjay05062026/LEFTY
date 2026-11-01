@@ -86,7 +86,9 @@ Rules:
   Lefty shows it as faint ghost text at the user's text cursor and they type over it, so: plain code only (no
   markdown fences, no explanation around it), 4-space indents, short lines, a few short comments are fine, at
   most 60 lines. Use the language they ask for, else the open file's language (from its name in the window
-  title), else Python. instruction: e.g. "Type along with me". Do this right away, even with no file open.
+  title), else Python. Also give file: a short name for a file of its own, with the right extension
+  ("linear_search.py", "Stack.java"), because Lefty writes the code into a new file and never into the one the
+  user has open. instruction: e.g. "Type along with me". Do this right away, even with no file open.
 - If the user wants errors or bugs in their code found or fixed ("find the error", "why doesn't this work", "fix my
   code") and a code editor is in front: action "check_code", instruction e.g. "Checking your code". Lefty reads the
   whole file himself, finds the errors, shows each one and offers to fix it.
@@ -121,6 +123,8 @@ const FIELDS = {
   text: { type: 'string', description: 'ONLY the literal text to type, or ONLY the key combo like "Ctrl+B". No explanations.' },
   message: { type: 'string', description: 'for done / answer / need_user / impossible: 1-3 short, clear sentences' },
   code: { type: 'string', description: 'for write_code: the whole code as plain text with real line breaks, no markdown fences' },
+  file: { type: 'string', description: 'for write_code: a short file name with the right extension, e.g. "linear_search.py". The code goes in a new file of its own.' },
+  lang: { type: 'string', description: 'for write_code: the language, lower case, e.g. "python"' },
   minutes: { type: 'integer', description: 'for focus: how long, in minutes (0 stops focus mode)' },
   allow: { type: 'array', items: { type: 'string' }, description: 'for focus: the apps, sites or tab words that are for work' },
   heard: { type: 'string', description: 'only when the goal came as a voice recording: exactly what the user said' },
@@ -499,6 +503,8 @@ Your last answer said done but also pointed at "${firstLine(target.name, 60)}", 
     message: plain(step.message).trim().slice(0, 300),
     app: action === 'open_app' ? firstLine(step.app || step.text, 60) : '',
     code: action === 'write_code' ? cleanCode(step.code) : '',
+    file: action === 'write_code' ? String(step.file || '').trim() : '',
+    lang: action === 'write_code' ? String(step.lang || '').trim() : '',
     target: ['open_app', 'write_code', 'check_code', 'focus', 'build_project'].includes(action) ? null : target,
     ...(action === 'focus' ? focusOf(step) : {}),
     heard: voice ? firstLine(step.heard, 300) : '',

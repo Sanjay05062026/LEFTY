@@ -882,23 +882,54 @@ ipcMain.handle('auto:scroll', async (_event, { rect, notches }) => {
 
 // Code Lefty writes himself (Do it mode instead of ghost code): pasted on a new line below the text cursor in VS Code,
 // so nothing already there is touched. The user's clipboard is put back afterwards.
-ipcMain.handle('auto:code', async (_event, { code }) => {
+// Code Lefty writes goes in a file of its own. The file the user has open is theirs, and whatever is in it has
+// nothing to do with what he was asked for: he once put a Python function into 800 lines of someone's SQL schema
+// because that was the window in front. Returns true once the editor is showing a blank file.
+async function blankFile(hwnd, process) {
+  const keys = editors.newFileKeys(process);
+  if (!keys) return false;
+  await press(hwnd, keys);
+  const after = await eyes.caret(hwnd);
+  // A blank file puts the cursor at the very start. If it isn't there, the keys did something else and the
+  // code must not be pasted: the user's own file is still in front.
+  return after.ln === 1 && after.col === 1;
+}
+
+// Gives the new file a name, so it is a real .py and not an unsaved tab. Ctrl+S on a file that has never been
+// saved opens the app's Save dialog, which is a window of its own: if no such window appears, nothing is typed.
+async function saveAs(hwnd, name) {
+  if (!name) return false;
+  await press(hwnd, ['ctrl+s', 'wait:900']);
+  const front = await eyes.front().catch(() => null);
+  if (!front || !front.hwnd || Number(front.hwnd) === Number(hwnd)) return false; // no dialog: leave it unsaved
+  await inject(() => eyes.keys(hwnd, [`text:${name}`, 'wait:150', 'enter', 'wait:700'], { anyAppWindow: true }));
+  const back = await eyes.front().catch(() => null);
+  return Boolean(back && Number(back.hwnd) === Number(hwnd)); // the dialog closed: it saved
+}
+
+ipcMain.handle('auto:code', async (_event, { code, file }) => {
   const lines = String(code).split('\n').length;
-  if (SELFTEST) { autoActions.push({ act: 'code', lines }); return { ok: true }; }
+  if (SELFTEST) { autoActions.push({ act: 'code', lines, file }); return { ok: true, file }; }
   try {
     doctorHwnd = null;
     const at = await editorInFront();
     if (at.error) return { ok: false, error: at.error };
+    if (!editors.canNewFile(at.caret.process)) {
+      return { ok: false, error: 'no-new-file', editor: editors.describe(at.caret.process) };
+    }
+    if (!await blankFile(at.hwnd, at.caret.process)) {
+      return { ok: false, error: 'no-new-file', editor: editors.describe(at.caret.process) };
+    }
     const saved = saveClipboard();
     try {
       clipboard.writeText(code);
-      // A new line under the cursor's line, without the editor's auto-indent (the code brings its own).
-      await press(at.hwnd, ['end', 'enter', 'wait:80', 'shift+home', 'wait:40', 'ctrl+v', 'wait:250']);
+      await press(at.hwnd, ['ctrl+v', 'wait:250']); // the file is empty: the code goes in as it is
     } finally {
       restoreClipboard(saved);
     }
-    console.log(`[lefty] do it: wrote ${lines} lines of code`);
-    return { ok: true };
+    const named = await saveAs(at.hwnd, file).catch(() => false);
+    console.log(`[lefty] do it: wrote ${lines} lines into a new file${named ? ` (${file})` : ' (unsaved)'}`);
+    return { ok: true, file, named };
   } catch (error) {
     console.log(`[lefty] do it: could not write the code: ${error.message}`);
     return { ok: false, error: 'failed' };

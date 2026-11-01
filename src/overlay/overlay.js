@@ -741,11 +741,21 @@ async function writeCode(decision) {
   retreatToCorner();
   setStepTag('', 'Writing the code…');
   playBody('press');
-  const result = await api.autoCode(decision.code);
+  const result = await api.autoCode({ code: decision.code, file: decision.file });
   if (job !== thisJob) return;
   if (!result.ok && result.error === 'not-editor') { codeInChat(decision.code, "Here's the code. (I can write it in for you in VS Code.)"); return; }
+  // The code belongs in a file of its own, and some editors have no key that opens a blank one. Rather than
+  // drop it into whatever the user had open, Lefty hands it over and says where to put it.
+  if (!result.ok && result.error === 'no-new-file') {
+    const where = result.editor || 'your editor';
+    codeInChat(decision.code, `Here's the code for ${decision.file}. (I can't make a new file in ${where}, and I won't write into the file you have open.)`);
+    return;
+  }
   if (!result.ok) { stopGuide("I couldn't write into your editor. Click into your code and ask me again."); return; }
-  finish({ done: true, message: 'Done! I wrote the code for you. Run it to see it work.' });
+  const message = result.named
+    ? `Done. I put the code in a new file, ${result.file}. Run it to see it work.`
+    : `Done. I put the code in a new tab — save it as ${result.file || 'a file of its own'} and run it.`;
+  finish({ done: true, message });
 }
 
 // Ctrl+Space while Lefty is working: his chat comes back so the Stop button can be reached. The task keeps

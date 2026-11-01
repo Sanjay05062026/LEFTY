@@ -192,5 +192,37 @@ test('the registry itself holds together', () => {
   }
 });
 
+/* ---------- A file of its own ---------- */
+// Lefty once wrote a Python function into 800 lines of someone's SQL schema, because that file happened to be
+// in front. Code he writes goes in a new file now, and in an editor where he cannot make one, nowhere at all.
+
+check(Array.isArray(editors.newFileKeys('code')), 'VS Code: Ctrl+N opens a blank file');
+check(editors.newFileKeys('code')[0] === 'ctrl+n', 'and that is the key pressed');
+check(editors.newFileKeys('code').some((k) => k.startsWith('wait:')), 'with a wait, so the tab is open before he types');
+for (const process of ['notepad', 'notepad++', 'sublime_text', 'cursor', 'windsurf']) {
+  check(editors.canNewFile(process), `${process}: can be given a new file`);
+}
+// Ctrl+N means "go to class" in the JetBrains IDEs and opens a template picker in Visual Studio: pressing it
+// would not make a blank file, so Lefty does not press it.
+for (const process of ['pycharm64', 'idea64', 'webstorm64', 'devenv']) {
+  check(!editors.canNewFile(process), `${process}: Ctrl+N is something else, so no new file`);
+  check(editors.newFileKeys(process) === null, `${process}: and no keys are offered`);
+}
+check(editors.canNewFile('some-editor-nobody-listed'), 'an unlisted editor still gets Ctrl+N');
+
+// --- naming the file ---
+check(editors.fileName('linear_search.py', { lang: 'python' }) === 'linear_search.py', "the brain's own name is kept");
+check(editors.fileName('D:/work/thing.js', { lang: 'javascript' }) === 'thing.js', 'a path is cut down to the name');
+check(editors.fileName('', { lang: 'python', fallback: 'open pycharm and write ghost code for linear search in python' })
+  === 'linear-search.py', 'no name given: the goal names it, without the orders or the editor');
+check(editors.fileName('', { lang: 'c++', fallback: 'write a quicksort in c++' }) === 'quicksort.cpp', 'c++ files end in .cpp');
+check(editors.fileName('', { lang: 'java', fallback: 'make a stack class' }) === 'stack-class.java', 'java files end in .java');
+check(editors.fileName('', { lang: '', fallback: '' }) === 'lefty-code.txt', 'nothing to go on: still a usable name');
+check(/^[\w.-]+$/.test(editors.fileName('', { lang: 'python', fallback: 'a "weird" name: ?*<>|' })),
+  'a name Windows would refuse never comes out');
+check(editors.fileName('', { lang: 'python', fallback: 'x'.repeat(200) }).length <= 45, 'a long goal makes a short name');
+check(editors.extensionFor('Python') === 'py', 'the language is matched whatever the case');
+check(editors.extensionFor('klingon') === '', 'an unknown language has no extension of its own');
+
 console.log(failed ? `\n${failed} editor check(s) failed.` : '\nAll editor checks passed.');
 process.exitCode = failed ? 1 : 0;

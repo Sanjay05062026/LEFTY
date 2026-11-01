@@ -17,6 +17,7 @@
 (function (root) {
   const Match = root.LeftyMatch || require('./match');
   const Dialogs = root.LeftyDialogs || require('./dialogs');
+  const Editors = root.LeftyEditors || require('../editors');
 
   const DIALOG_WAIT_MS = 1500; // after a click that may open a dialog, how long it may take to appear
   const nameOf = (el) => String((el && el.name) || '').trim();
@@ -272,8 +273,11 @@
         if (a.action === 'focus') return { id, kind: 'focus', minutes: a.minutes || 0, allow: a.allow || [], label: a.instruction || 'Focus mode' };
         if (a.action === 'build_project') return { id, kind: 'build', request: a.text || goalText, label: a.instruction || 'Building it' };
         if (a.action === 'write_code') {
-          return a.code ? { id, kind: 'code', code: a.code, label: a.instruction || 'Type along with me' }
-            : { giveUp: "I couldn't write that code just now. Ask me again?" };
+          // The code gets a file of its own, named here so Learn mode and Do it mode agree on the name.
+          return a.code ? {
+            id, kind: 'code', code: a.code, label: a.instruction || 'Type along with me',
+            file: Editors.fileName(a.file, { lang: a.lang, fallback: goalText }),
+          } : { giveUp: "I couldn't write that code just now. Ask me again?" };
         }
         const extra = { action: a.action, text: a.text || '' }; // Do it mode needs these: what to click or type
         if (!a.target) return { id, kind: 'tell', label, ...extra };

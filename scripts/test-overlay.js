@@ -88,5 +88,32 @@ check(/exe !== process\.execPath/.test(lock), 'it never restarts itself (no loop
 check(/theirs && theirs !== app\.getVersion\(\)/.test(lock),
   'the same build opening twice just shows the window, as before');
 
+// --- code goes in a file of its own ---
+// Lefty wrote a Python function into the middle of an 881-line SQL schema, because that was the window in
+// front. Whatever else changes, the code must never land in the file the user had open.
+const writeCode = main.slice(main.indexOf("ipcMain.handle('auto:code'"), main.indexOf("/* ---------- Settings ----------"));
+check(writeCode.length > 100, 'the handler that writes code is still there');
+check(/canNewFile\(/.test(writeCode), 'it asks whether this editor can be given a new file');
+check(/blankFile\(/.test(writeCode), 'it opens a blank one before writing');
+check(/'no-new-file'/.test(writeCode), 'an editor that cannot gets a refusal, not the code');
+check(!/'end', 'enter'/.test(writeCode), 'it no longer opens a line in whatever file was in front');
+check(/ctrl\+v/.test(writeCode), 'the code still goes in through the clipboard');
+
+const blank = main.slice(main.indexOf('async function blankFile'), main.indexOf('async function saveAs'));
+check(/after\.ln === 1 && after\.col === 1/.test(blank),
+  'a blank file is confirmed by the cursor being at the start, not assumed from the keypress');
+check(/return false/.test(blank), 'if the keys did something else, nothing is pasted');
+
+const save = main.slice(main.indexOf('async function saveAs'), main.indexOf("ipcMain.handle('auto:code'"));
+check(/Number\(front\.hwnd\) === Number\(hwnd\)/.test(save),
+  'the file name is typed only when a Save window of its own opened');
+check(/return false/.test(save), 'no dialog: the name is never typed into the code');
+
+// --- what the user is told ---
+check(/no-new-file/.test(overlay), 'the overlay has an answer for an editor that cannot make a file');
+check(/won't write into the file you have open/.test(overlay), 'and it says why, in plain words');
+check(/a new file, \$\{result\.file\}/.test(overlay), 'when it worked, he says which file the code is in');
+check(/save it as/.test(overlay), 'when it could not be saved, he says to save it');
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nall overlay checks passed');
 process.exit(failed ? 1 : 0);
