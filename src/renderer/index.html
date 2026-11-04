@@ -165,11 +165,12 @@
         <div id="thread" class="thread" hidden></div>
       </section>
 
+      <div id="task-status" class="task-status" role="status" hidden><i></i><span id="task-text"></span></div>
       <form id="composer" class="composer">
         <textarea id="composer-input" rows="1" placeholder="Ask Lefty, or give him a goal" aria-label="Message Lefty" spellcheck="true"></textarea>
         <button type="submit" id="composer-send" aria-label="Send"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
       </form>
-      <p class="composer-hint">Lefty steps aside and works on the app behind this window. Enter sends, Shift+Enter adds a line.</p>
+      <p class="composer-hint">Questions are answered here. In Do it mode, tasks run behind this window. Enter sends, Shift+Enter adds a line.</p>
     </main>
 
     <!-- Settings: slides over the chat -->
@@ -188,6 +189,17 @@
           <div class="seg" id="pref-mode" role="radiogroup" aria-label="How Lefty helps">
             <button type="button" role="radio" data-value="learn">Learn</button>
             <button type="button" role="radio" data-value="auto">Do it</button>
+          </div>
+        </div>
+        <div class="pref">
+          <div class="pref-text">
+            <h3>Access</h3>
+            <p>In Do it mode. Ask: a yes before every move. Auto: a yes before risky moves only. Full: no questions. Passwords and card numbers always stay yours.</p>
+          </div>
+          <div class="seg" id="pref-access" role="radiogroup" aria-label="Access">
+            <button type="button" role="radio" data-value="ask">Ask</button>
+            <button type="button" role="radio" data-value="auto">Auto</button>
+            <button type="button" role="radio" data-value="full">Full</button>
           </div>
         </div>
         <div class="pref">

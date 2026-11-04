@@ -421,6 +421,58 @@ const jpeg = Buffer.from('fake image');
   check(brain.safePath('src\\app.js') === 'src/app.js' && brain.safePath('./a.css') === 'a.css' && brain.safePath('a/../b') === '' && brain.safePath('~/x') === '' && brain.safePath('x/.env.local') === '',
     'safePath: backslashes and ./ are fine; .., home folders and .env files are not');
 
+  // Well-known apps open before anything is asked of the AI.
+  calls = [];
+  step = await ask({ goal: 'open Calculator and work out 12 times 8', app: 'Claude', title: 'Claude' });
+  check(calls.length === 0 && step.action === 'open_app' && step.app === 'Calculator', 'a well-known app opens with no AI call');
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'key', text: '12*8=', instruction: 'Type 12*8=' }) }] };
+  step = await ask({ goal: 'open Calculator and work out 12 times 8', app: 'Calculator', title: 'Calculator' });
+  check(calls.length === 1, 'once it is in front, the goal goes on to the AI');
+  check(step.action === 'type' && step.text === '12*8=', `"keys" that aren't a shortcut are typed instead (${step.action} ${step.text})`);
+  check(!brain.firstApp('open the File menu and save') && !brain.firstApp('open youtube and play music') && brain.firstApp('open VS Code, then write code') === 'VS Code' && brain.firstApp('open my Chrome') === 'Chrome', 'only well-known apps count, whatever follows them');
+  plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'key', text: 'Enter', instruction: 'Press Enter' }) }] };
+  step = await ask({ goal: 'confirm it' });
+  check(step.action === 'key', 'a real key is still a key');
+
+  // Chat: the words reach the page as they arrive.
+  const streamed = (lines) => ({ ok: true, status: 200, body: (async function* lines_() { const e = new TextEncoder(); for (const l of lines) yield e.encode(l); })() });
+  const sse = (text) => `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 4 } })}\n\n`;
+  let chatCalls = [];
+  brain.useFetch(async (url, options = {}) => {
+    if (url.includes('/models?')) return modelList;
+    chatCalls.push({ url, body: JSON.parse(options.body) });
+    if (chatCalls.length === 1) return busy();
+    const half = sse('Hello ');
+    return streamed([half.slice(0, 20), half.slice(20), sse('there 🙂'), sse(' friend')]);
+  });
+  const pieces = [];
+  const chatSaid = await brain.chat({ goal: 'hi', earlier: ['User: my name is Sam'], onText: (t) => pieces.push(t) });
+  check(chatSaid.text === 'Hello there  friend' && pieces.length === 3, `chat: pieces arrive one by one, even split across packets, no emoji (${JSON.stringify(pieces)})`);
+  check(/streamGenerateContent\?alt=sse/.test(chatCalls[1].url) && chatCalls.length === 2, 'chat: a busy model hands over to the next');
+  check(/my name is Sam/.test(chatCalls[1].body.contents[0].parts[0].text), 'chat: the earlier messages go with the question');
+  check(chatSaid.usage.output === 4, 'chat: the usage is kept');
+
+  chatCalls = [];
+  brain.useFetch(async (url) => {
+    if (url.includes('/models?')) return modelList;
+    chatCalls.push(url);
+    return streamed([sse('Half an answ')].concat([])).body && { ok: true, status: 200, body: (async function* broken() { yield new TextEncoder().encode(sse('Half an answ')); throw new Error('connection lost'); })() };
+  });
+  const lost = await brain.chat({ goal: 'hi', onText: () => {} }).catch((e) => e);
+  check(lost instanceof Error && chatCalls.length === 1, 'chat: cut off half way, it stops there instead of starting the answer again');
+
+  brain.useFetch(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); });
+  const localPieces = [];
+  brain.useLocalFetch(async (url, options) => {
+    if (url.endsWith('/api/tags')) return reply(200, { models: [{ name: 'lefty-vision:latest' }] });
+    const body = JSON.parse(options.body);
+    check(body.stream === true && !body.format, 'chat offline: streamed plain text from the local model');
+    return streamed([`${JSON.stringify({ message: { content: 'Off' } })}\n${JSON.stringify({ message: { content: 'line' } })}\n`, JSON.stringify({ done: true, prompt_eval_count: 5, eval_count: 2 })]);
+  });
+  const offlineSaid = await brain.chat({ goal: 'hi', onText: (t) => localPieces.push(t) });
+  check(offlineSaid.text === 'Offline' && localPieces.length === 2 && offlineSaid.usage.output === 2, 'chat offline: the local model answers, word by word');
+  brain.useFetch(fakeFetch);
+
   // LEFTY_MODEL pins one model.
   process.env.LEFTY_MODEL = 'gemini-3.6-flash';
   calls = [];
@@ -428,6 +480,105 @@ const jpeg = Buffer.from('fake image');
   await ask();
   check(calls.length === 1 && calls[0].model === 'gemini-3.6-flash', 'LEFTY_MODEL pins the model');
   delete process.env.LEFTY_MODEL;
+
+  // --- Offline: no internet, so the local model on this PC answers ---
+  const noInternet = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); };
+  let localCalls = [];
+  let localModels = ['lefty-vision:latest'];
+  let localReply = { status: 'step', action: 'click', instruction: 'Click here', point: { x: 384, y: 216 } };
+  const localFake = async (url, options = {}) => {
+    if (url.endsWith('/api/tags')) return reply(200, { models: localModels.map((name) => ({ name })) });
+    const body = JSON.parse(options.body);
+    localCalls.push({ url, body });
+    return reply(200, { message: { content: JSON.stringify(localReply) }, prompt_eval_count: 1200, eval_count: 30 });
+  };
+  brain.useFetch(noInternet);
+  brain.useLocalFetch(localFake);
+  step = await ask({ imageSize: { width: 768, height: 432 } });
+  const localBody = localCalls[0] && localCalls[0].body;
+  check(localBody && localBody.model === 'lefty-vision' && localBody.messages[1].images[0] === jpeg.toString('base64'), 'no internet: the local model gets the same screenshot');
+  check(localBody && localBody.format.properties.status && /Goal: open a file/.test(localBody.messages[1].content) && /You are Lefty/.test(localBody.messages[0].content),
+    'no internet: ...and the same instructions, with the answer held to the same JSON shape');
+  check(step.target && step.target.rect.x === 1536 + 768 - 18 && step.target.rect.y === 432 - 18, 'no internet: the local model points in screenshot pixels, converted to the screen');
+  check(brain.provider() === 'local' && /local: lefty-vision/.test(brain.label()), `no internet: the log says the local model answered (${brain.label()})`);
+  localCalls = [];
+  await ask();
+  check(localCalls.length === 1, 'no internet: the next ask goes straight to the local model, without waiting on the internet first');
+  let voiceError = await ask({ audio: { mime: 'audio/wav', data: 'UklGRg==' } }).catch((e) => e);
+  check(voiceError && voiceError.local && voiceError.voice, 'no internet: a spoken goal says voice needs the internet');
+
+  // Plain goals are read without the model: it answered "open Notepad" with "Close the current window".
+  localCalls = [];
+  step = await ask({ goal: 'open Notepad' });
+  check(localCalls.length === 0 && step.action === 'open_app' && step.app === 'Notepad', 'offline: "open Notepad" opens it, without asking the model');
+  localReply = { status: 'step', action: 'click', instruction: 'Close the current window', element_id: 1242, app: '', text: '', message: '' };
+  step = await ask({ goal: 'press the big blue thing' });
+  check(step.status === 'need_user' && !step.target && localCalls[0].body.options.num_predict === 300, 'offline: a button the model made up is never clicked, and a step is kept short');
+  localReply = { status: 'step', action: 'click', instruction: 'Open Task Manager', element_id: 1, app: '', text: '', message: '' };
+  step = await ask({ goal: 'press the big blue thing' });
+  check(step.status === 'need_user' && !step.target, 'offline: a real button that has nothing to do with the step is never clicked');
+  localReply = { status: 'step', action: 'click', instruction: 'Click File', element_id: 0, app: '', text: '', message: '' };
+  step = await ask({ goal: 'press the big blue thing' });
+  check(step.status === 'step' && step.target && step.target.name === 'File', 'offline: a button that fits the step is');
+  localCalls = [];
+  step = await ask({ goal: 'create a todo website' });
+  check(localCalls.length === 0 && step.action === 'build_project' && /todo website/.test(step.text), 'offline: a website goes to the builder, never to clicking around');
+  check(!brain.localAppGoal('open the File menu') && !brain.localAppGoal('open a new tab') && !brain.localCodeGoal('build a website') && brain.localCodeGoal('write a python function') && brain.localQuestion('what is 25 times 4'),
+    'offline: what the goal asks for is told apart without the model');
+
+  // No key at all: the local model is the brain when Ollama has it, and nothing is when it doesn't.
+  const savedKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = '';
+  process.env.LEFTY_BRAIN = 'local'; // stands in for "no key" on a PC whose .env file has one
+  brain.useFetch(fakeFetch);
+  brain.useLocalFetch(localFake);
+  await brain.checkLocal();
+  check(brain.ready() && brain.provider() === 'local', 'LEFTY_BRAIN=local: the local model is the brain');
+  calls = [];
+  localCalls = [];
+  localReply = { code: 'print("hi")' };
+  check(await brain.writeCode({ request: 'say hi in python' }) === 'print("hi")' && calls.length === 0, 'LEFTY_BRAIN=local: code comes from the local model, nothing goes to Gemini');
+  check(localCalls[0].body.model === 'lefty-vision', 'no coding model installed: code comes from the vision model');
+  localModels = ['lefty-vision:latest', 'qwen2.5-coder:3b'];
+  await brain.checkLocal();
+  localCalls = [];
+  await brain.writeCode({ request: 'say hi in python' });
+  localReply = { status: 'step', action: 'click', instruction: 'Click File', element_id: 0, app: '', text: '', message: '' };
+  await ask();
+  check(localCalls[0].body.model === 'qwen2.5-coder:3b' && localCalls[1].body.model === 'lefty-vision', 'with a coding model installed: code goes to it, steps on screen stay with the vision model');
+  // A website from the local model is built in steps: HTML, then CSS and JS written for that HTML, then the script
+  // is checked and sent back to fix.
+  const stepFake = (answers) => async (url, options = {}) => {
+    if (url.endsWith('/api/tags')) return reply(200, { models: localModels.map((name) => ({ name })) });
+    const body = JSON.parse(options.body);
+    localCalls.push({ url, body });
+    const key = body.format ? 'html' : /style\.css/.test(body.messages[0].content.slice(0, 40)) ? 'css' : 'js';
+    const next = answers[key].shift();
+    return reply(200, { message: { content: body.format ? JSON.stringify(next) : next }, prompt_eval_count: 100, eval_count: 50 });
+  };
+  const page = '<html><head></head><body><input id="task-input"><button id="add-btn">Add</button><ul id="list"></ul></body></html>';
+  brain.useLocalFetch(stepFake({
+    html: [{ html: page, item_template: '<li class="task"><span class="task-text"></span></li>', summary: 'A todo list.' }],
+    css: ['```css\nbody { font-family: Poppins; }\n```'],
+    js: ['const x = document.getElementById("new-task"); x.focus(', 'const y = document.getElementById("new-task");', 'const z = document.getElementById("task-input");'],
+  }));
+  await brain.checkLocal();
+  localCalls = [];
+  const staged = await brain.buildProject({ request: 'a todo list' });
+  const asked = localCalls.map((c) => (c.body.format ? 'html' : /style\.css/.test(c.body.messages[0].content.slice(0, 40)) ? 'css' : 'js'));
+  check(asked.join(',') === 'html,css,js,js,js', `local build: HTML, then CSS, then the script, fixed until it runs and finds its ids (${asked.join(',')})`);
+  check(/<li class="task">/.test(localCalls[1].body.messages[1].content) && /id="task-input"/.test(localCalls[2].body.messages[1].content), 'local build: the CSS and the script are written for that HTML and its item template');
+  check(/does not run/.test(localCalls[3].body.messages[1].content) && /#new-task/.test(localCalls[4].body.messages[1].content), 'local build: the fix request says exactly what is wrong');
+  const index = staged.files.find((f) => f.path === 'index.html').content;
+  check(staged.files.map((f) => f.path).join(',') === 'index.html,style.css,script.js' && /href="style\.css"/.test(index) && /src="script\.js"/.test(index),
+    'local build: three files, and index.html loads the other two even when the model forgot');
+  check(/task-input/.test(staged.files[2].content) && staged.summary === 'A todo list.', 'local build: the fixed script is the one saved');
+  check(staged.files[1].content === 'body { font-family: Poppins; }' && !localCalls[1].body.format, 'local build: CSS and JS come back as plain code (in JSON they lost their line breaks), fences removed');
+
+  brain.useFetch(fakeFetch); // Ollama not running
+  check(!(await brain.checkLocal()) && brain.provider() !== 'local', 'no Ollama running: the local model is not the brain');
+  delete process.env.LEFTY_BRAIN;
+  process.env.GEMINI_API_KEY = savedKey;
   delete process.env.GEMINI_API_KEY;
 
   console.log(failed ? `\n${failed} brain checks failed.` : '\nAll brain checks passed.');

@@ -83,7 +83,7 @@ function pointAt(target) {
   ring.style.height = `${r.h + RING_PAD * 2}px`;
   ring.classList.remove('show', 'hit');
   void ring.offsetWidth; // replay the entrance when pointing at a new target
-  ring.classList.add('show');
+  if (!autoOn()) ring.classList.add('show'); // in Do it mode Lefty himself shows where he's working: no highlight
 
   const tipX = r.x + r.w - Math.min(10, r.w * 0.3);
   const tipY = r.y + r.h - Math.min(8, r.h * 0.3);
@@ -159,6 +159,7 @@ function setStepTag(count, text, { done = false } = {}) {
   stepTag.classList.add('show', 'glide');
   placeStepTag();
   updateModeChip();
+  if (homeTask) api.taskStatus(text);
 }
 
 function nudgeStepTag() {
@@ -264,7 +265,29 @@ let lookToken = 0;      // bumped by every new look: only the latest one acts
 let looking = false;
 let watchTimer = null;
 
+// A task from the main page: the main window shows how it goes, and the bubble keeps out of the way until it's closed.
+let homeTask = false;
+function endHomeTask() {
+  if (!homeTask) return;
+  homeTask = false;
+  api.taskStatus('');
+  setTimeout(() => { if (!job && !homeTask) api.requestHide(); }, HOME_TASK_LINGER_MS);
+}
+const HOME_TASK_LINGER_MS = 2500;
+const POP_SHOWS_MS = 5000;
+api.onPop(() => {
+  if (!homeTask) return;
+  homeTask = false;
+  const doing = stepTag.textContent;
+  addMessage(`Still on it${doing ? `: ${doing}` : '.'}`, 'lefty', { say: false, save: false });
+  tuckBubble(false);
+  api.taskStatus('');
+  const thisJob = job;
+  setTimeout(() => { if (job === thisJob && job && !job.paused) tuckBubble(true); }, POP_SHOWS_MS);
+});
+
 function cancelJob() {
+  endHomeTask();
   job = null;
   lookToken += 1;
   looking = false;
@@ -305,12 +328,13 @@ const isOnScreen = (rect) => {
 const sameRect = (a, b) => ['x', 'y', 'w', 'h'].every((key) => Math.abs(a[key] - b[key]) < 1);
 
 // Ends the guide and brings the chat back with a message: used whenever the user's attention is needed.
-function stopGuide(message) {
+function stopGuide(message, { save = true } = {}) {
   api.log(`stopped: ${message}`);
+  const fromHome = homeTask;
   cancelJob();
   stopPointing();
-  addMessage(message, 'lefty');
-  tuckBubble(false);
+  addMessage(message, 'lefty', { save });
+  if (!fromHome) tuckBubble(false); // the answer is in the main window
 }
 
 function show(decision) {
@@ -366,7 +390,8 @@ function showThinking() {
   job.decision = null;
   ring.classList.remove('show', 'hit');
   api.setTarget(null);
-  setStepTag('', job.memory.history && job.memory.history.length ? 'Thinking…' : 'Looking at your screen…');
+  const started = job.memory.history && job.memory.history.length;
+  setStepTag('', !started ? 'Looking at your screen…' : autoOn() ? 'Checking what changed…' : 'Thinking…');
 }
 
 // The goal is about another app ("...in VS Code", asked from the desktop): switch to it if it's open, or ask
@@ -387,7 +412,7 @@ async function openApp(decision) {
     stopGuide(`I can't find ${decision.app} on this PC. If it's installed, open it and call me again.`);
     return;
   }
-  if (autoOn()) { // Do it mode: opening an app is harmless, so Lefty just does it
+  if (autoOn() && settings.access !== 'ask') { // Do it mode: opening an app is harmless, so Lefty just does it
     setStepTag('', `Opening ${found.app}…`);
     api.log(`do it: opening ${found.app}`);
     const launched = await api.launchApp({ app: found.app, appId: found.appId, want: decision.app });
@@ -440,7 +465,7 @@ const AUTO_IDLE_WAIT_MAX_MS = 8000; // ...but he gets on with it after this, how
 const AUTO_MAX_SAME = 6;         // the same click this many times with nothing moving on: it isn't working
 const AUTO_GRACE_MS = 600;       // the key that sent the goal may arrive just after the job starts: not a stop
 const AUTO_MAX_FAILS = 6;        // failed tries at one step before the user is asked to do it
-let settings = { mode: 'learn', size: 'normal', speak: 'off', privateApps: [] };
+let settings = { mode: 'learn', access: 'auto', size: 'normal', speak: 'off', privateApps: [] };
 let lastUserInputAt = 0;
 
 const autoOn = () => settings.mode === 'auto';
@@ -452,10 +477,16 @@ const autoWorking = () => Boolean(job) && autoOn() && !job.paused && !job.yourTu
 let toldWorking = false;
 function tellWorking() {
   const working = autoWorking();
+  leftyEl.classList.toggle('working', working);
   if (working === toldWorking) return;
   toldWorking = working;
   api.setWorking(working);
+  // A window or menu that opens during the job would otherwise be drawn over him, and he'd seem to have gone.
+  clearInterval(raiseTimer);
+  raiseTimer = working ? setInterval(() => api.raise(), RAISE_EVERY_MS) : null;
 }
+const RAISE_EVERY_MS = 1500;
+let raiseTimer = null;
 
 const YOUR_TURN = {
   choice: 'Your turn: ',
@@ -489,6 +520,8 @@ function applySettings(next) {
   speakButton.setAttribute('aria-pressed', String(talking));
   speakButton.title = talking ? 'Lefty talks: on' : 'Lefty talks: off';
   if (!talking) hush();
+  showAccess();
+  if (autoOn()) ring.classList.remove('show');
   if (job && settings.mode !== before) {
     api.log(`mode: ${settings.mode === 'auto' ? 'Do it' : 'Learn'}${job.decision ? ` during ${job.decision.id}` : ''}`);
     job.yourTurn = null;
@@ -508,6 +541,27 @@ document.querySelectorAll('#mode button').forEach((b) => {
   b.addEventListener('click', () => { api.setSettings({ mode: b.dataset.mode }); input.focus(); });
 });
 speakButton.addEventListener('click', () => { api.setSettings({ speak: settings.speak === 'on' ? 'off' : 'on' }); input.focus(); });
+
+// The access button: how free Lefty is in Do it mode. Each click moves to the next choice and says what it means.
+const ACCESS = {
+  ask: { label: 'Ask', next: 'auto', says: "Ask every time: I'll check with you before every move." },
+  auto: { label: 'Auto', next: 'full', says: 'Auto: I only ask before risky moves, like deleting, paying, sending or installing.' },
+  full: { label: 'Full', next: 'ask', says: "Full access: I won't ask before anything, even deleting. Passwords and card numbers stay yours." },
+};
+const accessButton = document.getElementById('access');
+function showAccess() {
+  const access = ACCESS[settings.access] || ACCESS.auto;
+  accessButton.querySelector('span').textContent = access.label;
+  accessButton.classList.toggle('full', settings.access === 'full');
+  accessButton.title = `${access.says} Click to change.`;
+}
+accessButton.addEventListener('click', async () => {
+  const next = (ACCESS[settings.access] || ACCESS.auto).next;
+  const now = await api.setSettings({ access: next });
+  applySettings(now);
+  addMessage(ACCESS[next].says, 'lefty', { say: false, save: false });
+  input.focus();
+});
 
 // The chip beside the step tag: "Do it for me" in Learn mode, "Stop" while Lefty works.
 function updateModeChip() {
@@ -558,7 +612,7 @@ const centre = (rect) => ({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
 async function autoStep(decision) {
   if (!autoOn() || !job || job.paused || job.autoBusy) return;
   if (['open', 'code', 'doctor', 'focus', 'build'].includes(decision.kind)) return; // act() handles these
-  const plan = LeftyAuto.plan(decision);
+  const plan = LeftyAuto.plan(decision, settings.access);
   if (plan.yourTurn) { yourTurn(decision, plan.yourTurn); return; }
   if (job.yourTurn === decision.id) return; // handed to the user earlier (failed tries, or they chose to do it)
   if (job.acted === decision.id) return;    // done; waiting for the screen to move on
@@ -606,6 +660,7 @@ async function perform(thisJob, decision, plan) {
     return;
   }
   playBody('press');
+  setStepTag(decision.count || '', LeftyAuto.statusFor(plan, decision) || tagText(decision));
   let result;
   if (plan.act === 'click') {
     api.setTarget(null); // Lefty's own click is not the user's
@@ -662,12 +717,14 @@ async function autoFailed(decision, error) {
   reconsider(null); // the screen moved on (or the target moved): look again
 }
 
-// Risky steps wait for a yes. The ring stays on what Lefty would click.
-function askFirst(thisJob, decision, plan) {
+// Risky steps wait for a yes. The ring shows what Lefty would click: the one time Do it mode highlights anything.
+// go: what a yes does (the step itself, unless it isn't one autoStep takes).
+function askFirst(thisJob, decision, plan, go = autoStep) {
   job.paused = true;
+  if (decision.target) ring.classList.add('show');
   updateModeChip();
   api.log(`do it: asking first (${plan.ask})`);
-  addChoices(`${plan.ask}. Shall I do it?`, [
+  addChoices(`${plan.ask.replace(/\.$/, '')}. Shall I do it?`, [
     {
       label: 'Yes, do it',
       primary: true,
@@ -675,9 +732,10 @@ function askFirst(thisJob, decision, plan) {
         if (job !== thisJob) return;
         job.paused = false;
         job.okFor = decision.id;
+        ring.classList.remove('show');
         tuckBubble(true);
         api.log('do it: the user said yes');
-        autoStep(job.decision && job.decision.id === decision.id ? job.decision : decision);
+        go(job.decision && job.decision.id === decision.id ? job.decision : decision);
       },
     },
     {
@@ -734,6 +792,7 @@ function resumeAuto(thisJob, mode) {
 async function writeCode(decision) {
   if (job.coding === decision.id) return;
   const thisJob = job;
+  if (settings.access === 'ask' && job.okFor !== decision.id) { askFirst(thisJob, decision, { ask: "I'm about to write this code into a new file" }, writeCode); return; }
   job.coding = decision.id;
   job.decision = decision;
   ring.classList.remove('show', 'hit', 'error');
@@ -1007,7 +1066,7 @@ const AUTO_DOCTOR_SHOW_MS = 1400;
 function autoDoctor(thisJob) {
   const d = job.doctor;
   const p = d.problems[d.i];
-  if (!autoOn() || !p || p.picked) return;
+  if (!autoOn() || settings.access === 'ask' || !p || p.picked) return; // Ask every time: the user picks each fix
   setTimeout(() => {
     if (job !== thisJob || job.paused || !autoOn() || p.picked || d.problems[d.i] !== p) return;
     p.picked = true;
@@ -1154,7 +1213,14 @@ api.onCaret(async (caret) => {
 function act(decision, event) {
   if (decision.done) { finish(decision); return true; }
   if (decision.giveUp) { api.log(`gave up: ${decision.giveUp}`); stopGuide(decision.giveUp); return true; }
-  if (decision.say) { api.log(`said: ${decision.say}`); stopGuide(decision.say); return true; }
+  if (decision.say) {
+    api.log(`said: ${decision.say}`);
+    if (decision.say.length <= LONG_ANSWER_CHARS || homeTask) { stopGuide(decision.say); return true; }
+    record('lefty', decision.say); // too long for a bubble
+    openInMain();
+    stopGuide(OPENED_IN_MAIN, { save: false });
+    return true;
+  }
   if (decision.thinking) { showThinking(); return true; }
   if (decision.kind === 'open') { job.thinking = false; openApp(decision); return true; }
   if (decision.kind === 'code') { job.thinking = false; if (autoOn()) writeCode(decision); else startGhost(decision); return true; }
@@ -1271,14 +1337,44 @@ function runJob(first) {
 // The installed app reads %APPDATA%\lefty\.env (run from the code, the .env next to package.json works too).
 const NO_KEY_HINT = 'Get a free key at aistudio.google.com/apikey and put GEMINI_API_KEY=your-key in a .env file in %APPDATA%\\lefty, then ask again.';
 
-async function ask(goal) {
+// A bubble is for a line or two. Anything longer goes to the main window, and the bubble says so.
+const LONG_ANSWER_CHARS = 280;
+const OPENED_IN_MAIN = 'Opened in the main window.';
+async function openInMain(goal) {
+  const id = chat.ready ? await chat.ready : null;
+  api.openChat({ chatId: id, goal });
+}
+
+async function ask(goal, { fromHome = false } = {}) {
   addMessage(goal, 'user');
   input.value = '';
   cancelJob();
   stopPointing();
   hideTip();
-  tuckBubble(false); // replies show in the chat; it tucks away again only if a guide starts
+  homeTask = fromHome;
+  if (fromHome) { api.taskStatus('Starting…'); tuckBubble(true); } else tuckBubble(false); // replies show in the chat; it tucks away again only if a guide starts
   const token = lookToken;
+
+  // "Explain X in detail", asked here: no bubble could hold the answer.
+  if (!fromHome && LeftyRoute.wantsDetail(goal) && await api.brainReady()) {
+    openInMain(goal);
+    addMessage(OPENED_IN_MAIN, 'lefty', { save: false });
+    return;
+  }
+  // A plain question: answered in words. The screen has nothing to do with it, so nothing on it is touched.
+  if (!fromHome && LeftyRoute.wantsChat(goal) && await api.brainReady()) {
+    const typing = showTyping();
+    const answer = await api.quickChat({ goal, earlier: chat.earlier.slice(0, -1) });
+    typing.remove();
+    if (token !== lookToken) return;
+    if (answer.ok && answer.text.length > LONG_ANSWER_CHARS) {
+      record('lefty', answer.text);
+      openInMain();
+      addMessage(OPENED_IN_MAIN, 'lefty', { save: false });
+      return;
+    }
+    if (answer.ok || answer.error) { addMessage(answer.text || answer.error, 'lefty'); return; }
+  }
 
   // "Focus 30 minutes on Chrome": handled here, no brain needed.
   const focusAsk = LeftyFocus.parse(goal);
@@ -1541,7 +1637,7 @@ api.onContext((seen) => {
 
 // A goal typed in the home screen's chat: Lefty is up over the app in front; an opened chat continues where it
 // stopped (its last few messages show again, and a project built in it is the one a change goes to).
-api.onAsk(async ({ goal, chatId }) => {
+api.onAsk(async ({ goal, chatId, fromHome }) => {
   if (chatId) {
     const r = await api.chatGet(chatId).catch(() => null);
     const old = r && r.ok && r.chat;
@@ -1552,7 +1648,7 @@ api.onAsk(async ({ goal, chatId }) => {
       if (old.project) lastProject = old.project;
     }
   }
-  ask(goal);
+  ask(goal, { fromHome: Boolean(fromHome) });
 });
 
 api.onHide(() => {

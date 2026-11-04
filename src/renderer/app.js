@@ -179,7 +179,7 @@ async function enterHome() {
 let privateApps = [];
 
 function showSettings(settings) {
-  for (const [id, value] of [['pref-mode', settings.mode], ['pref-size', settings.size], ['pref-speak', settings.speak]]) {
+  for (const [id, value] of [['pref-mode', settings.mode], ['pref-access', settings.access], ['pref-size', settings.size], ['pref-speak', settings.speak]]) {
     $(id).querySelectorAll('button').forEach((b) => {
       const on = b.dataset.value === value;
       b.classList.toggle('on', on);
@@ -198,7 +198,7 @@ const SETTING_TOASTS = {
 if (api.getSettings) {
   api.getSettings().then(showSettings).catch(() => {});
   api.onSettings(showSettings);
-  for (const [id, key] of [['pref-mode', 'mode'], ['pref-size', 'size'], ['pref-speak', 'speak']]) {
+  for (const [id, key] of [['pref-mode', 'mode'], ['pref-access', 'access'], ['pref-size', 'size'], ['pref-speak', 'speak']]) {
     $(id).querySelectorAll('button').forEach((b) => {
       b.addEventListener('click', async () => {
         const now = await api.setSettings({ [key]: b.dataset.value });
@@ -208,7 +208,7 @@ if (api.getSettings) {
     });
   }
 } else {
-  showSettings({ mode: 'learn', size: 'normal', speak: 'off', privateApps: [] }); // previewed in a plain browser
+  showSettings({ mode: 'learn', access: 'auto', size: 'normal', speak: 'off', privateApps: [] }); // previewed in a plain browser
 }
 
 /* ---------- Private apps: no screenshots, no code sent ---------- */
@@ -393,7 +393,7 @@ function bubble(text, role) {
 }
 
 async function showThread() {
-  if (!currentChat || !api.chatGet) return;
+  if (!currentChat || !api.chatGet || streaming) return;
   const asked = currentChat;
   const r = await api.chatGet(asked).catch(() => null);
   if (asked !== currentChat) return; // another chat was opened meanwhile
@@ -472,6 +472,53 @@ function send(text) {
   if (currentChat) $('thread').append(bubble(goal, 'user'));
   else waitingForNew = true;
   api.homeAsk({ goal, chatId: currentChat });
+}
+
+/* An answer in the main page, word by word. While it's being written the thread is left alone: a reload from the
+   history would wipe the words already on the page. */
+let streaming = null;
+function follow() { const scroll = $('chat-scroll'); scroll.scrollTop = scroll.scrollHeight; }
+if (api.onChatStream) {
+  api.onChatStream(async (event) => {
+    if (event.type === 'open') { openChat(event.chatId); return; }
+    if (event.type === 'start') {
+      if (event.chatId) { closeSettings(); currentChat = event.chatId; waitingForNew = false; }
+      streaming = null;
+      await showThread();
+      $('welcome').hidden = true;
+      $('thread').hidden = false;
+      streaming = streaming || bubble('', 'lefty');
+      streaming.classList.add('writing');
+      $('thread').append(streaming);
+      follow();
+      return;
+    }
+    if (event.type === 'text') {
+      streaming = streaming || bubble('', 'lefty');
+      streaming.classList.add('writing');
+      if (!streaming.isConnected) { $('thread').hidden = false; $('thread').append(streaming); }
+      streaming.append(document.createTextNode(event.text));
+      follow();
+      return;
+    }
+    const done = streaming;
+    streaming = null;
+    if (done) done.classList.remove('writing');
+    if (event.error) {
+      if (done && !done.textContent) done.remove();
+      toast(event.error);
+      $('thread').append(bubble(event.error, 'lefty'));
+      follow();
+    }
+    refresh();
+  });
+}
+if (api.onTaskStatus) {
+  api.onTaskStatus((status) => {
+    $('task-status').hidden = !status;
+    $('task-text').textContent = status || '';
+    if (!status) refresh();
+  });
 }
 
 const composerInput = $('composer-input');
