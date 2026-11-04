@@ -1,0 +1,596 @@
+================================================================================
+  LEFTY - IDEAS TO BE DONE
+  Team Kratos-X
+  Living plan: every idea, decision, machine split and LLM discussion lives here.
+  Last updated: 2026-11-02
+================================================================================
+
+HOW TO USE THIS FILE
+  - This is the single source of truth for the plan. Update it instead of
+    re-explaining things in chat.
+  - New decisions go in the right section. Dated news goes in the UPDATES LOG
+    at the bottom (newest first).
+  - Status tags: [TODO] [DOING] [DONE] [DECIDED] [OPEN] [LATER]
+  - Nothing is committed to git during the selection round unless the team says so.
+
+
+--------------------------------------------------------------------------------
+0. TEAM (5 people, 4 laptops)
+--------------------------------------------------------------------------------
+  Person              Laptop                         Role
+  ------------------  -----------------------------  ----------------------------------
+  Sanjay (lead)       HP Victus, RTX 2050 4 GB       Frontend + backend: the Lefty app,
+                                                     Phases 0-3, redesign build, merges
+                                                     everyone's work, vision model
+  Varun               Lenovo LOQ, RTX 3050 6 GB      AI / brain: Ollama server, model
+                                                     benchmarks, data cleaning,
+                                                     fine-tuning Lefty-8B on Colab
+  Josheetha           Basic HP (no separate GPU)     Design + testing: reference pictures
+                                                     and mockups, test checklist,
+                                                     20-task benchmark list, bug reports,
+                                                     demo script
+  Kishore & Sriram    Lenovo (Ryzen AI 5 330,        Integrations + ears [PROPOSED]
+                      Radeon 820M, shared)             Kishore: VS Code extension +
+                                                       PyCharm plugin (ghost code)
+                                                       Sriram: offline voice (Whisper) +
+                                                       live dashboard
+
+  How the roles connect:
+    - Josheetha's 20 test tasks are used by Varun (score each model version)
+      and Sanjay (catch bugs).
+    - Varun's training data comes from Lefty's step logging (Sanjay, Phase 0).
+    - Kishore's extensions talk to Lefty through one connection agreed with
+      Sanjay at the start.
+    - Testing on the basic HP proves Lefty works on ordinary laptops.
+  [OPEN] Git: one branch per person, Sanjay merges. Decide when team commits
+         start without breaking the selection-round no-commit rule.
+
+
+--------------------------------------------------------------------------------
+1. CURRENT STATE (as of 2026-11-02)
+--------------------------------------------------------------------------------
+  Version: 0.1.5 (pulled from origin/main, 10 commits ahead of the old local copy)
+  Installed on the Victus at %LOCALAPPDATA%\Programs\lefty, data at %APPDATA%\lefty
+
+  [DONE] Install / uninstall / reinstall tested.
+         Uninstall kills all 5 Lefty.exe processes and uia-helper.exe, with no
+         "cannot be closed" dialog. Registry entry, shortcuts and the
+         "uninstalling" note are all cleaned up. %APPDATA%\lefty (key, settings,
+         chats) is kept on purpose.
+  [DONE] Self-close watcher works even on the elevated (administrator) process.
+  [DONE] Fixed: overlay crashed on load with "require is not defined".
+         Cause: in src/overlay/overlay.html, skills.js loaded before
+         ../editors.js, so LeftyEditors did not exist yet. Fix: load editors.js
+         first. Rebuilt and reinstalled; fix verified inside the installed
+         app.asar. (Uncommitted.)
+  [DONE] Full npm test passes (exit 0). Note: it passed before the fix too,
+         so the tests do not catch real breakage yet.
+
+  Verified working on their own:
+    - Gemini key: valid, 60 models, gemini-3.6-flash answers.
+    - Brain (nextStep) end to end: 4.9 s, correct step.
+    - Screen reader (eyes): starts in under 1 s, snapshot 98 ms.
+
+  Untested so far:
+    - Autostart ("Start with Windows") cleanup on uninstall.
+    - "Folder thrown away" path (exe-deleted check, every 20 s).
+    - Interactive (double-click) installer once exited with code 2 and
+      installed nothing, after closing the running copy. Needs a manual retry.
+
+
+--------------------------------------------------------------------------------
+2. KNOWN PROBLEMS
+--------------------------------------------------------------------------------
+  [TODO] Asked to open VS Code and write code: thought for about a minute and
+         never opened VS Code. Suspects: wasted model retries, the app-launch
+         path (Start-menu app ID), or the "wait for slow apps" loop.
+  [TODO] Two backup models (gemini-3.7-flash, gemini-flash-latest) reject
+         thinking level "minimal" with HTTP 400, so every fallback wastes a
+         round trip.
+  [TODO] Asked for ghost code in Do it mode: he ignored it and repeated
+         "Done. I put the code in a new file" word for word. Do it mode always
+         writes code to a file; the request should win over the mode.
+  [TODO] He claims "Done" even when nothing new happened.
+  [TODO] No follow-up memory: "write ghost code for it" did not know what "it" was.
+  [TODO] VS Code Restricted Mode blocks things; Ln/Col in the status bar was not
+         visible (possibly covered by Lefty's "Focus 30 min" chip). The current
+         ghost code depends on reading Ln/Col.
+  [TODO] eyes.start() waits for the helper's "ready" line with no timeout, so a
+         stuck helper would hang a request forever with no error.
+  [TODO] test:overlay, test:editors and test:icon exist but are not in the
+         npm test chain. test-overlay.js does not check script order.
+  [TODO] Victus C: drive has only about 3.2 GB free. Clear space.
+
+
+--------------------------------------------------------------------------------
+3. BUILD LIST (in order)
+--------------------------------------------------------------------------------
+
+PHASE 0 - Fix what is broken
+  [TODO] 1.  VS Code open failure and slow thinking (find the cause with logs).
+  [TODO] 2.  What the user asks for beats the mode (ghost code in Do it mode).
+  [TODO] 3.  Never claim "Done" falsely. Fail out loud in plain words.
+  [TODO] 4.  Follow-up memory ("it" = the previous thing).
+  [TODO] 5.  Plan first: a 3-5 step plan, shown in the status bubble.
+  [TODO] 6.  Check every step; try another way if the screen did not change.
+  [TODO] 7.  Memory layer: solved routes replayed without an AI call,
+             user corrections, preferences. Also logs good steps as training
+             data from day one (see section 8).
+  [DOING] 8. Tests that catch real breakage: overlay loads with zero console
+             errors, missing tests added to npm test, eyes.start timeout.
+
+PHASE 1 - Presence and control
+  [DONE] 9.  Floating cursor companion over every app, like the ChatGPT pet,
+             so you always know Lefty is working.
+  [DONE] 10. Small live status bubble next to him, updated every step
+             ("Opening VS Code...", "Typing the code...").
+  [DONE] 11. Do it mode: no highlighting. Learn mode keeps highlighting.
+  [DONE] 12. Clicks without moving the user's mouse (Windows accessibility,
+             UIA Invoke). Fallback for apps that do not support it: move the
+             mouse briefly and put it back.
+  [DONE] 13. Permission button (like Codex / Antigravity):
+               - Ask every time: confirm every click, key and command
+               - Auto (default): ask only before risky steps (delete, buy,
+                 pay, send, post, install, dangerous terminal commands)
+               - Full access: no confirmations
+             Proposal: passwords, card numbers and PINs stay with the user
+             in every mode unless the team decides otherwise. [OPEN]
+
+PHASE 2 - Main window and bubble
+  [DONE] 14. Main page = text chat (he answers in text).
+             Bubble / Ctrl+Space = points and does.
+  [DONE] 15. Long answers (detailed view, PDF answers, code, place cards)
+             open the main window automatically; the bubble says
+             "Opened in the main window."
+  [DONE] 16. Tasks started from the main page run in the background; closing
+             the main window pops up the bubble.
+  [DONE] 17. Streamed answers (word by word).
+
+PHASE 3 - New abilities
+  [TODO] 18. "+" button to upload images and PDFs (main page and bubble).
+  [TODO] 19. Upload a PDF of questions and he answers them.
+  [TODO] 20. Open AND operate any app.
+  [TODO] 21. Places search (cafes etc.): cards with name, location, price
+             range and rating from Google, plus his ranked pick of which to
+             try. Needs location permission or a named area. Data source:
+             Gemini with Google Search (check if Maps grounding is available
+             on the key). Needs internet; never offline.
+  [TODO] 22. Write code and build websites; open in VS Code and the browser.
+  [TODO] 23. Image generation through Gemini (logos, website images, edits
+             of uploaded images).
+  [TODO] 24. Terminal access in a visible terminal, governed by the
+             permission button.
+  [TODO] 25. Remove the old restrictions (private apps list, "your turn"
+             steps, .env skipping) - replaced by the permission button.
+
+PHASE 4 - Ghost code done properly
+  [TODO] 26. VS Code extension: native gray ghost text (the same mechanism
+             Copilot uses). Tab accepts, Esc dismisses, Ctrl+Right accepts
+             one word. Works in Cursor, Windsurf, Antigravity and in
+             Restricted Mode.
+  [TODO] 27. PyCharm / JetBrains plugin with the same ghost text.
+
+PHASE 5 - Our own brain (last)
+  [TODO] 28. Ollama on the LOQ (8B text) + Brain setting in Lefty
+             (Gemini / Our model) + automatic fallback to Gemini + token.
+  [TODO] 29. Vision model on the Victus (3B).
+  [TODO] 30. Voice (Whisper) on laptop 3.
+  [TODO] 31. Benchmark candidate models on 20 real tasks (accuracy and
+             seconds per step).
+  [TODO] 32. Fine-tune "Lefty-8B" and show before/after numbers.
+  [TODO] 33. Offline images: SD-Turbo on the Victus, swapping out the vision
+             model.
+  [TODO] 34. Live dashboard on laptop 3 showing all three machines.
+
+DEMO DAY
+  - All laptops on our own phone hotspot (venue Wi-Fi often blocks devices
+    talking to each other). Mobile data off for the offline demo.
+  - Bring all chargers and a power strip. Never demo on battery.
+  - Written demo script. Recorded backup video.
+  - One-click start script on each laptop.
+
+
+--------------------------------------------------------------------------------
+4. FRONT END REDESIGN
+--------------------------------------------------------------------------------
+  [OPEN] Team will share images, mockups and references.
+  Useful to share: screenshots of apps we like or a Figma link, mockups,
+  Lefty's character as SVG (or a big transparent PNG), logo / app icon
+  (SVG or 1024x1024 PNG), colors (hex codes), fonts (Google Fonts),
+  light / dark / both.
+
+  Screens to design:
+    1. Main window (home + chat)       5. Permission button
+    2. Bubble (Ctrl+Space chat)        6. "+" upload menu
+    3. Floating companion cursor       7. Place cards
+    4. Status bubble                   8. Settings (brain choice etc.)
+  Minimum needed: main window and bubble; the rest can follow that style.
+
+  [OPEN] Keep the old rule (no emoji, calm professional tone, line icons)?
+  Plan: Phase 0 is logic only and can start while designs are prepared.
+  Phases 1-2 get built directly in the new look.
+
+
+--------------------------------------------------------------------------------
+5. MACHINES AND THE SPLIT
+--------------------------------------------------------------------------------
+  Machine        Owner    CPU                  GPU / VRAM               Job
+  -------------  -------  -------------------  -----------------------  ----------------------------
+  HP Victus      Sanjay   i5-13420H, 16 GB     RTX 2050, 4 GB           Lefty app + EYES (3B vision)
+  Lenovo LOQ     Varun    i5-13450HX, RAM ?    RTX 3050 Laptop, 6 GB    BRAIN (8B text)
+  Lenovo         Kishore  Ryzen AI 5 330       Radeon 820M built-in     EARS (voice) + memory/logs
+  ("laptop 3")   & Sriram                      (no separate GPU)        + dashboard
+  Basic HP       Josheetha  ?                  no separate GPU          Testing on an ordinary laptop
+                                                                        (uses Gemini)
+  Gemini         Cloud    -                    -                        Fast images, big PDFs, code,
+                                                                        places, fallback
+
+  Story for judges: eyes, brain and ears on three machines, plus the cloud.
+
+  Routing rules (DECIDED):
+    - Each request goes to ONE model. No chaining vision -> text on every
+      step (that is slower than a single model).
+    - Normal app steps: 8B text on the LOQ (it reads the button list as text).
+    - Apps with no button list, uploaded photos, scanned PDFs: vision on
+      the Victus.
+    - Long PDFs, big code, places search, images (online): Gemini.
+    - If a machine is off or unreachable: fall back to Gemini.
+
+  Why laptop 3 is not used for images or vision:
+    No NVIDIA card, tiny built-in graphics. A 3B vision model would FIT
+    (it uses normal RAM) but be slow: estimate 15-40 s per step against
+    3-6 s on the Victus. The NPU only runs some models through AMD's own
+    tools, not Ollama. Possible slow offline backup only if time allows.
+
+  Networking:
+    - Ollama on the LOQ must accept connections from the local network
+      and needs a firewall rule.
+    - Ollama has no password: use our own hotspot, or put a token check in
+      front (reuse Lefty's server/index.js).
+    - Network adds only a few milliseconds; screenshots are 100-300 KB.
+
+
+--------------------------------------------------------------------------------
+6. LLM NOTES (everything we discussed)
+--------------------------------------------------------------------------------
+  Building a model from scratch: not possible (millions of dollars of
+  compute). Realistic: take an open model (Qwen, Gemma, Llama) and
+  fine-tune it on Lefty's own data. Pitch it as "self-hosted, fine-tuned
+  open model". Never claim "trained from scratch".
+
+  Vision vs text-only:
+    Text-only reads only words. Vision models also see images (screenshots,
+    photos, scanned PDFs). Vision adds an image encoder: about 0.5-1 GB more
+    VRAM and slower. Lefty sends both a text button list and a screenshot;
+    the button list alone is often enough for normal apps.
+
+  What fits (4-bit, short context; estimates):
+    Model                        VRAM needed   4 GB   6 GB          8 GB
+    3-4B vision                  ~3-3.5 GB     yes    yes           yes
+    7-8B text only               ~5-5.5 GB     no     just barely   yes
+    7-8B vision                  ~6-7 GB       no     spills, slow  yes
+    If a model is bigger than VRAM it spills into RAM and gets several
+    times slower. Laptop VRAM cannot be upgraded (soldered).
+
+  Speed estimates (to be benchmarked):
+    4B vision on RTX 2050 (4 GB):  ~4-8 s per step
+    4B vision on RTX 3050 (6 GB):  ~3-5 s per step
+    8B text on RTX 3050 (6 GB):    ~3-6 s per step
+    Gemini now:                    ~3-5 s per step (measured 4.9 s once)
+
+  Context and tokens:
+    Context = everything the model reads at once (instructions, goal, button
+    list, history, its answer). Measured in tokens; 1 token ~ 3/4 of a word.
+    A real Lefty request measured 1,862 tokens in + 46 out.
+    4,000-token context is enough for Lefty and costs ~0.5 GB on an 8B model.
+    8,000 ~ 1-1.2 GB, 32,000 ~ 4-5 GB (does not fit the LOQ).
+    Long PDFs and big code files go to Gemini (about 1 million tokens).
+
+  Do tokens run out?
+    Our own model: never. Free and unlimited; only the per-request context
+      limit applies.
+    Gemini free tier: per-minute and per-day limits that reset. Images and
+      big PDFs use quota fastest. Check limits at aistudio.google.com.
+    Long chats: old messages get trimmed; the memory layer keeps what matters.
+
+  LOQ setup (8B text, ~5.7-6.1 GB total, right at the limit):
+    setx OLLAMA_FLASH_ATTENTION 1
+    setx OLLAMA_KV_CACHE_TYPE q8_0
+    (roughly halves context memory; restart Ollama after)
+    Candidates: qwen3:8b (turn thinking mode off for speed), llama3.1:8b
+    Keep ONE model loaded per machine; swapping costs several seconds.
+
+  Victus vision model: qwen2.5vl:3b (leaves headroom on 4 GB).
+  Victus Ollama: installed, no models yet, models stored on D:\OllamaModels.
+
+  Why "30% of Claude" is the wrong target:
+    Lefty already uses a frontier brain (Gemini). What makes an assistant
+    feel good is also the harness: read the situation, plan, act, check,
+    retry, fail out loud, route easy work to fast models and hard work to
+    strong ones, stream answers. That is what Phase 0 adds.
+
+
+--------------------------------------------------------------------------------
+7. IMAGE GENERATION
+--------------------------------------------------------------------------------
+  [DECIDED] Online: Gemini image models (gemini-2.5-flash-image,
+            gemini-3.1-flash-image on our key). Fast, best quality, edits.
+            [OPEN] Check the free-tier limit for image models with one test call.
+  [DECIDED] Offline: SD-Turbo on the Victus, temporarily unloading the vision
+            model (vision is needed only occasionally, so Lefty never freezes).
+            Not on the LOQ: unloading the 8B brain offline means no fallback,
+            so Lefty would freeze.
+  Estimates: SD-Turbo ~3-6 s per 512x512 image on the RTX 2050, plus a
+  10-20 s swap.
+  Quality: Gemini clearly better (detail, text inside images, edits).
+  Demo idea: same logo online and offline - "sharper online, still works
+  offline".
+  Later: great offline images need one machine with an 8 GB+ NVIDIA card
+  (SDXL / FLUX).
+  Licence: some Stability models (SD-Turbo) limit commercial use. Check
+  before selling Lefty.
+
+
+--------------------------------------------------------------------------------
+8. FINE-TUNING AND GETTING BETTER AFTER EVERY CHAT
+--------------------------------------------------------------------------------
+  Layer 1 - better after every chat (no training), build first:
+    - Solved routes replayed directly with no AI call (~1 s instead of ~5 s)
+    - User corrections and preferences remembered
+    - Similar past successes added to the prompt as examples
+    - Works with any brain, including Gemini. User can view and delete memory.
+
+  Layer 2 - a better model every week (fine-tuning):
+    Use Lefty -> collect verified good steps -> fine-tune on Colab/Kaggle ->
+    test on the 20-task benchmark -> switch only if better, keep the old
+    version for rollback.
+    Good example = screen check confirmed it worked and the user did not
+    stop or correct it. Thumbs up/down adds signal. Good-vs-bad pairs can
+    teach what not to do (preference training, DPO).
+    Not after every single chat: risk of learning mistakes, forgetting,
+    cost, no safety check.
+
+  Time estimate (part-time):
+    Collect 1,000-2,000 examples   3 days (automated) to 2 weeks (normal use)
+    Clean data                     1-2 days
+    Set up training notebook       ~1 day
+    Train                          ~1-3 h (8B text), 2-5 h (4B vision)
+    Convert + load into Ollama     a few hours
+    Test                           half a day to 1 day
+    Second round                   2-3 days
+    First good version: ~1.5-3 weeks part-time, ~4-6 days focused.
+    Each later version: ~1 day.
+
+  Tips:
+    - Fine-tune the 8B TEXT model (training data is text, faster and cheaper).
+    - Start logging in Phase 0 so data collects during all of Phases 1-4.
+    - Our 4 GB / 6 GB cards can RUN the model but not train it; train on
+      free Colab / Kaggle GPUs.
+
+  Pitch: "Lefty gets better the more you use him" - live replay (5 s first
+  time, 1 s from memory) and a chart of v1 -> v2 -> v3 success rates.
+
+
+--------------------------------------------------------------------------------
+9. AFTER THE HACKATHON
+--------------------------------------------------------------------------------
+  Product:
+    - Teach by showing: do a task once, Lefty repeats it; shareable skills
+    - Schedules and triggers ("every Friday 5 pm...", "when a PDF lands...")
+    - Indian-language voice (Tamil, Hindi, Telugu...)
+    - Personal memory of apps, habits, preferences
+    - Phone companion: start tasks from the phone, get notified when done
+  Markets:
+    - Company software training ("digital adoption"; Whatfix is a known
+      name). Lefty works in any app without per-app setup.
+    - Accessibility: older people, low vision, first-time users
+    - Education: colleges teaching Excel, VS Code, Tally...
+  Needed for a real product:
+    - Signed installer (code-signing certificate)
+    - Action log and undo
+    - Nightly test run of ~100 real tasks
+    - Business model: free with own key, paid hosted brain, company plan
+    - macOS later (big rewrite of screen reading)
+
+
+--------------------------------------------------------------------------------
+10. OPEN QUESTIONS
+--------------------------------------------------------------------------------
+  [OPEN] When is the next hackathon round / deadline? (decides whether
+         fine-tuning makes the demo)
+  [OPEN] Passwords in Full access mode: stay with the user, or allowed?
+  [OPEN] Keep the no-emoji / professional tone / line icons rule in the
+         redesign?
+  [OPEN] LOQ RAM size.
+  [OPEN] Lenovo (laptop 3) and basic HP RAM sizes.
+  [OPEN] Confirm the Kishore / Sriram split.
+  [OPEN] PPT: for the team, the judges, or both?
+  [OPEN] Gemini image free-tier limit.
+
+
+--------------------------------------------------------------------------------
+11. USEFUL COMMANDS
+--------------------------------------------------------------------------------
+  Real GPU name and VRAM (trust this, not AdapterRam - it caps at ~4 GB):
+    nvidia-smi --query-gpu=name,memory.total --format=csv
+
+  RAM in GB:
+    powershell -c "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB"
+
+  Build installer:     npm run dist
+  Run from code:       npm start
+  All tests:           npm test
+
+
+================================================================================
+UPDATES LOG (newest first)
+================================================================================
+2026-11-04 (Phase 2 done - uncommitted, not in the installed app yet)
+  - Item 14: new src/route.js decides words or actions. Main page answers questions in text.
+    Plain questions in the bubble get a direct answer and never touch the screen.
+  - Item 15: long answers (over 280 characters) and "in detail" questions open the main window.
+  - Item 16: in Do it mode a main-page task runs behind the open window with a live status row.
+    Closing the window pops the bubble ("Still on it: ..."). Learn mode still steps aside.
+  - Item 17: answers stream word by word, from Gemini and from the local model offline.
+  - Live: all 6 tests pass on the real app. Offline chat: 6.8 s to first words, 7.5 s total.
+  - Known gap: with the main window in front and no app named, Lefty can't read the app behind
+    it ("no app window found"), so "save this" from the main page has less to work with.
+  - Known gap: Lefty's hosted backend has no chat route yet, so it keeps the old behaviour.
+
+2026-11-04 (Phase 1 done - uncommitted, not in the installed app yet)
+  - Item 9: Lefty stays above every app with a busy pulse while he works.
+  - Item 10: the status beside him names each move ("Clicking Save draft...").
+  - Item 11: no highlight in Do it mode. It comes back only while he waits for a yes.
+  - Item 12: already built: UIA press, mouse restored. Mouse confirmed still in live tests.
+  - Item 13: access button (shield in the bubble, and in Settings): Ask / Auto / Full.
+    Auto now also asks before money, sending, installing and dangerous commands.
+    Passwords and card numbers stay the user's in all three. [OPEN item resolved that way.]
+  - Fixed along the way: well-known apps open with no AI call (25-30 s -> about 1 s);
+    "12*8=" sent as keys is now typed; typing no longer presses a button first (gave 896).
+    Offline: a real but unrelated button is never clicked; websites go to the builder.
+  - Fixed the stale self-test. npm test passes end to end, including the self-test.
+  - Live tests on real Calculator and a small test app: all pass after the fixes. One
+    Ask-mode run failed on a slow, flaky Gemini answer (Lefty refused to click, safely);
+    3 repeats passed.
+  - Gemini was slow at the venue: 3-50 s per answer. A goal can take 30 s of steps.
+
+2026-11-04 (offline test failed, then fixed - uncommitted)
+  - Sanjay tested Lefty offline: not working. He did reach the local model, but:
+      "open Notepad" -> "Close the current window", on a button that didn't exist
+      "write a python function" -> code in the wrong field, so a blank reply
+      "what is 25 times 4" -> model wrote until it timed out (90 s)
+  - Fix: plain goals are read by code, not the model (localStep in brain.js).
+      Open an app: no model, instant. Code: coder model. Questions: short answer.
+      Screen steps: model, max 300 tokens. A button it invents is never clicked; Lefty says so.
+  - Real test after the fix: Notepad 0.0 s, python function 6.0 s, 25 x 4 = 100 in 7.2 s,
+    Hamlet 0.2 s. Each switch between the two models costs about 6 s. Screen steps are still weak.
+  - Still to confirm: the user's own test with Wi-Fi off in the running app.
+  - LOQ: gpt-oss:20b chosen (no 12b exists; 120b is about 65 GB). ollama pull gpt-oss:20b
+
+2026-11-04 (local builds in steps - uncommitted)
+  - The local model now builds a site in steps (localBuild in brain.js): HTML first (plus the
+    markup of one list item), then CSS and JS written for that HTML. Then Lefty checks the script
+    (does it parse, do its ids exist) and sends errors back to be fixed, twice at most.
+  - Found: code inside a JSON answer came back on ONE line, so the first // comment hid
+    the whole rest of the script ("Unexpected end of input" every time). CSS and JS are now asked
+    for as plain code and keep their line breaks. 6 new tests, all passing.
+  - qwen-coder 3B, same todo prompt: 52.2 s, 312 lines (36 HTML, 187 CSS, 89 JS), script runs
+    first time. Poppins font, gradient, rounded pill input, red delete buttons.
+    Works: add, Enter key, count, saved in browser.
+    Broken: tasks get no id, so ticking throws an error, delete removes the LAST task, and the
+    filters throw an error. These only show up when the page runs, so the next step is a real
+    feature test: Lefty opens the page in a hidden window, clicks through each feature, and
+    sends any failure back to fix.
+
+2026-11-04 (local builds: design brief + lower randomness - uncommitted)
+  - Local models now get their own short build instructions (LOCAL_BUILD_SYSTEM in brain.js).
+    They spell out the design: CSS variables, Google font, gradient, card with shadow, styled
+    buttons, animations, phone layout. Temperature is 0.3 instead of 0.95. Gemini is unchanged.
+  - qwen-coder 3B, same todo prompt, before -> after:
+      Time 24.0 s -> 40.7 s; CSS 1 basic rule set -> 136 lines (font, gradient, shadow,
+      2 animations, phone layout); script still parses.
+      Works: add, count, delete button per task, saved in the browser.
+      Still broken: Enter key, ticking doesn't save or strike through, filters do nothing.
+  - Next: check-and-fix loop (test each named feature, send failures back to the model).
+
+2026-11-04 (todo website race: 3 brains, same prompt)
+  - qwen2.5-coder:3b installed. Lefty now sends code jobs (write code, code doctor,
+    build project) to it when it's installed, and screen steps to lefty-vision
+    (LEFTY_LOCAL_CODER to change, off to skip). 1 new test, passing. Uncommitted.
+  - Same "beautiful todo website" prompt through Lefty's builder:
+      Brain             Time      Size                 Result
+      lefty-vision 3B   41.7 s    4 files, 204 lines   script broken (syntax error), nothing works
+      qwen-coder 3B     24.0 s    3 files, 141 lines   runs: add, save, count, tick by click.
+                                                       No delete, no Enter key, filter bug that
+                                                       erases tasks, plain look
+      Gemini Flash      136.7 s   5 files, 2356 lines  polished and everything works, plus many extras
+  - The coder model fixed "broken code" but not "good". Next: the qwen2.5-coder:7b model on the
+    LOQ (6 GB), plus Lefty checking the code and sending errors back to fix.
+  - Note: on the 4 GB Victus only one of the two local models fits at a time. Switching
+    between a screen step and a code job costs about 4 s to load the other model.
+
+2026-11-04 (offline brain connected - uncommitted)
+  - [DONE] Lefty now uses the local model on this PC when there is no internet or no key.
+    In src/brain.js: if Gemini can't be reached, he switches to Ollama "lefty-vision" and stays
+    local for 1 minute, then tries the internet again. Settings:
+      LEFTY_BRAIN=local         always use the local model
+      LEFTY_LOCAL_MODEL=name    another Ollama model (off = no local brain)
+      OLLAMA_HOST               if Ollama is on another machine (e.g. the LOQ)
+    Voice still needs the internet. Friendly offline messages added to main.js.
+    7 new checks in test-brain.js, all passing.
+  - Found: the 3B model answered "need_user" to every step with Lefty's long instructions.
+    A short instruction just for the local model, with every field required, fixed that.
+  - Big test, same 6 jobs on both brains:
+      Job                     Local (3B, this PC)          Gemini Flash (internet)
+      Open Calculator         wrong (click, no target)      right (open_app) 3.2 s
+      Notepad: Click File     right 1.4 s                   right 2.6 s
+      Notepad: Save as        right 1.9 s                   right 1.6 s
+      Write binary search     right 3.3 s (16 lines)        right 3.6 s (31 lines, comments)
+      Code doctor (3 bugs)    found 2 of 3, 2.9 s           found 3 of 3, 2.3 s
+      Build todo website      3 files/116 lines, 16.8 s     4 files/423 lines, 306 s
+      All jobs                30.5 s                        319.8 s
+  - Verdict: local is fast and fine for simple steps and code. Gemini is clearly better at
+    judgment (which app, all bugs, big projects). The 8B model on the LOQ (OLLAMA_HOST)
+    should close much of the gap.
+  - Not caused by this change: npm run selftest already fails at "stop message after
+    the user clicked". It fails the same way without the change.
+
+2026-11-03 (vision model speed-up)
+  - The Victus card is an RTX 2050 with 4 GB.
+  - Found the real cause of the slowness: Ollama put only 12 of 37 layers on the card,
+    even with about 2.4 GB of it free.
+  - [DONE] Made a preset called "lefty-vision" (qwen2.5vl:3b with num_gpu 37,
+    num_ctx 4096). It shares the same files, so no extra disk.
+    Now 100% GPU and writing at about 47 tokens/s, up from 15. Per screenshot:
+    about 3.3 s reading plus about 2.4 s writing, about 6 s with the model
+    already loaded, about 9.5 s from cold.
+  - [DONE] User settings saved: OLLAMA_FLASH_ATTENTION=1, OLLAMA_KV_CACHE_TYPE=q8_0
+    (memory cache 144 MB -> 77 MB).
+  - Watch: the card is at about 3.7 of 4 GB while it runs. If a game or Epic
+    launcher is using the card, the load may fail. Close them for the demo, or
+    fall back to plain qwen2.5vl:3b.
+  - Lefty should call model "lefty-vision" with keep_alive so it stays loaded.
+
+2026-11-03 (vision model on the Victus)
+  - [DONE] qwen2.5vl:3b installed through Ollama (3.2 GB, stored in D:\OllamaModels).
+  - Tested on a screenshot of this desktop:
+      Full 1536x864 image: 1779 image tokens, first run 55 s (15 s loading),
+        then about 7 s. Said the taskbar was at the top (wrong).
+      Shrunk to 1024x576: 1149 tokens, 6.2 s total (2.8 s reading, 3.2 s
+        writing at about 19 tokens/s). Taskbar answer correct.
+  - [DECIDED] Shrink screenshots to about 1024 wide before sending them. It's faster
+    and gave the better answer.
+  - The 4 GB card holds only about half the model (ollama ps: 53% CPU / 47% GPU).
+    It still works, just slower than a full fit. Try OLLAMA_FLASH_ATTENTION=1 and
+    OLLAMA_KV_CACHE_TYPE=q8_0, close GPU-heavy apps, or a smaller num_ctx.
+  - The model reads window titles well but names only a few buttons. Use it for
+    "what is on screen" and keep UI Automation for exact button positions.
+  - Test script: scratchpad vision-test/test-vision.mjs (node test-vision.mjs <png>).
+
+2026-11-02 (decks)
+  - Two slide decks made (download as PowerPoint .pptx or PDF from the page):
+      Team plan (17 slides):  https://claude.ai/artifact/2v5J2jjMwbWfoRztX6MttB
+      Judges pitch (12 slides): https://claude.ai/artifact/3rnoRUWF1vn1iNHuwg4YkB
+    Pitch rules: solid cards = working today, dashed cards = roadmap.
+    The learning slide has bracketed placeholders ([__ s], [__%]) to fill
+    only with real benchmark numbers. Both are private until shared from
+    the page's Share menu.
+
+2026-11-02 (later)
+  - Team set: Sanjay (Victus, lead), Varun (LOQ, AI/brain), Josheetha (basic HP,
+    design + testing), Kishore & Sriram (Lenovo with Radeon, integrations + ears,
+    split proposed). PPT for everything requested.
+
+2026-11-02
+  - File created. Captured all ideas, the build list, the three-machine split,
+    LLM, image generation and fine-tuning discussions.
+  - Hardware confirmed: Victus RTX 2050 4 GB; LOQ (Varun) RTX 3050 6 GB,
+    i5-13450HX; laptop 3 Ryzen AI 5 330 with Radeon 820M (no separate GPU).
+  - Decided: laptop 3 = ears + memory + dashboard. Offline images on the
+    Victus by swapping out the vision model.
+  - Overlay crash fixed, rebuilt and reinstalled (uncommitted).
+
+2026-11-01
+  - Pulled v0.1.5. Installed, uninstalled (all processes killed, clean),
+    reinstalled.
+  - Found the overlay "require is not defined" crash that stopped all replies.
