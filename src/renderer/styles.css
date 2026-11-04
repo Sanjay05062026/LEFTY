@@ -265,3 +265,11 @@ button.tip:hover { border-color: var(--teal); transform: translateY(-2px); }
 
 @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Being written, and a task running behind the window */
+.bubble-msg.writing::after { content: ""; display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px; background: var(--muted); animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.task-status { display: flex; align-items: center; gap: 8px; max-width: 760px; width: 100%; margin: 0 auto 8px; padding: 8px 12px; font-size: 13px; color: var(--muted); }
+.task-status[hidden] { display: none; }
+.task-status i { width: 8px; height: 8px; border-radius: 50%; background: #14B8A6; animation: task-pulse 1.2s ease-in-out infinite; }
+@keyframes task-pulse { 50% { opacity: .3; } }

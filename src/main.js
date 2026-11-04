@@ -6,6 +6,7 @@ const eyes = require('./eyes');
 const Focus = require('./overlay/focus');
 const brain = require('./brain');
 const remoteBrain = require('./brain-remote');
+const route = require('./route');
 const apps = require('./apps');
 const editors = require('./editors');
 const snap = require('./snap');
@@ -289,6 +290,8 @@ function createMainWindow() {
     event.preventDefault();
     mainWindow.hide();
     console.log('[lefty] home window closed: still running in the tray');
+    // A task from the main page carries on: his bubble comes up, so the user can still see and stop it.
+    if (homeTask) overlayWindow.webContents.send('lefty:pop');
     if (!trayHintShown && tray && !SELFTEST) {
       trayHintShown = true;
       tray.displayBalloon({
@@ -460,24 +463,84 @@ ipcMain.handle('auth:changed', (_event, loggedIn) => {
 // From the home screen's buttons: step the home window aside first, so Lefty reads (and points into)
 // the app that is then in front, not an app hidden behind his own window.
 ipcMain.on('lefty:summon', () => {
-  if (!mainWindow.isVisible() || mainWindow.isMinimized()) { showLefty(); return; }
+  if (mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized()) { showLefty(); return; }
   mainWindow.minimize();
   setTimeout(() => showLefty(), SUMMON_DELAY_MS);
 });
 ipcMain.on('lefty:request-hide', hideLefty);
 
-// From the home screen's chat: the home window steps aside and Lefty takes the goal to the app in front, in the
-// same chat (so the AI sees the earlier messages and a project built in it is changed, not made again).
+// From the home screen's chat. A question is answered right there, in words, as they are written. Anything to do on
+// the PC goes to Lefty, in the same chat (so the AI sees the earlier messages and a project built in it is changed,
+// not made again). In Do it mode the home window stays where it is and shows how the task goes. In Learn mode it steps
+// aside: the user needs to see what he points at.
+let homeTask = null; // what a task from the main page is doing right now
 ipcMain.handle('home:ask', (_event, { goal, chatId } = {}) => {
   const text = String(goal || '').trim().slice(0, 2000);
   if (!text) return { ok: false };
+  if (route.wantsChat(text) && !SELFTEST && thinker().chat) { // Lefty's backend has no chat route yet: it stays a goal
+    answerInChat(text, chatId || null).catch((error) => console.log('[lefty] chat failed:', error.message));
+    return { ok: true, kind: 'chat' };
+  }
   const go = () => {
     showLefty();
-    setTimeout(() => { if (!overlayWindow.isDestroyed()) overlayWindow.webContents.send('lefty:ask', { goal: text, chatId: chatId || null }); }, 120);
+    setTimeout(() => { if (!overlayWindow.isDestroyed()) overlayWindow.webContents.send('lefty:ask', { goal: text, chatId: chatId || null, fromHome: true }); }, 120);
   };
-  if (SELFTEST || !mainWindow.isVisible() || mainWindow.isMinimized()) go();
-  else { mainWindow.minimize(); setTimeout(go, SUMMON_DELAY_MS); }
-  return { ok: true };
+  const stepAside = settings.get().mode !== 'auto' && !SELFTEST && mainWindow.isVisible() && !mainWindow.isMinimized();
+  if (stepAside) { mainWindow.minimize(); setTimeout(go, SUMMON_DELAY_MS); } else go();
+  return { ok: true, kind: 'task' };
+});
+
+// How a task from the main page is going ('' when it's over): the home window shows it, and main remembers it for
+// when that window is closed.
+ipcMain.on('task:status', (_event, status) => {
+  homeTask = status ? String(status).slice(0, 120) : null;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task:status', homeTask);
+});
+
+// The answer in the home window, word by word, kept in the chat. saved: the question is already in it (asked in the bubble).
+async function answerInChat(goal, chatId, { saved = false } = {}) {
+  const tell = (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:stream', event); };
+  let id = chatId;
+  if (!id) {
+    const made = await history.create(goal);
+    id = made && made.ok && made.chat ? made.chat.id : null;
+  }
+  const old = id ? await history.get(id).catch(() => null) : null;
+  const before = (old && old.ok && old.chat ? old.chat.messages : []).slice(-12).map((m) => `${m.role === 'user' ? 'User' : 'Lefty'}: ${String(m.text).slice(0, 600)}`);
+  if (id && !saved) await history.add(id, 'user', goal);
+  historyChanged();
+  tell({ type: 'start', chatId: id });
+  const started = Date.now();
+  try {
+    const { text, usage } = await thinker().chat({ goal, earlier: saved ? before.slice(0, -1) : before, onText: (piece) => tell({ type: 'text', text: piece }) });
+    console.log(`[lefty] chat (${thinker().label()}, ${Date.now() - started} ms, ${(usage && usage.output) || 0} out)`);
+    if (id) await history.add(id, 'lefty', text);
+    tell({ type: 'end' });
+  } catch (error) {
+    console.log(`[lefty] chat failed: ${error.message}`);
+    tell({ type: 'end', error: friendlyBrainError(error) });
+  }
+  historyChanged();
+}
+
+// A question asked in the bubble that has nothing to do with the screen: no screenshot, nothing clicked. On a busy
+// screen the step brain went looking for something to do with it ("the capital of France" pressed a Send button).
+ipcMain.handle('lefty:quick-chat', async (_event, { goal, earlier } = {}) => {
+  if (SELFTEST || !thinker().chat) return { ok: false, skip: true };
+  try {
+    const { text } = await thinker().chat({ goal: String(goal || '').slice(0, 2000), earlier: Array.isArray(earlier) ? earlier.slice(-12).map((m) => String(m).slice(0, 600)) : [] });
+    return { ok: true, text };
+  } catch (error) {
+    console.log(`[lefty] quick chat failed: ${error.message}`);
+    return { ok: false, error: friendlyBrainError(error) };
+  }
+});
+
+// A long answer from the bubble: opens in the main window. goal: not answered yet, so it is written there.
+ipcMain.on('lefty:open-chat', (_event, { chatId, goal } = {}) => {
+  openHome();
+  if (goal) answerInChat(String(goal).slice(0, 2000), chatId || null, { saved: true }).catch((error) => console.log('[lefty] chat failed:', error.message));
+  else mainWindow.webContents.send('chat:stream', { type: 'open', chatId });
 });
 
 /* ---------- Chat history (history.js): Supabase or this PC. Only the chat text, and never logged. ---------- */
@@ -1015,7 +1078,13 @@ async function captureScreen(display) {
 
 function friendlyBrainError(error) {
   const status = error && error.status;
-  if (error && error.message === 'no API key') return "The AI isn't connected: there's no API key.";
+  if (error && error.message === 'no API key') return "The AI isn't connected: there's no API key, and no local model is running.";
+  if (error && error.local) { // the local brain on this PC (no internet, or no key)
+    if (error.voice) return "I'm offline, and I need the internet to hear you. Type your goal instead.";
+    if (error.down) return "I'm offline and my local model isn't running. Start Ollama and try again.";
+    if (error.timeout) return 'My local model took too long. Try again, or close apps that use the graphics card.';
+    return 'My local model ran into a problem. Try again in a moment.';
+  }
   if (error && error.remote) { // Lefty's backend answered with a problem
     if (status === 401) return "The AI server didn't accept this copy of Lefty. Check LEFTY_APP_TOKEN in the .env file.";
     if (status === 429) return "I'm being asked to slow down. Give me a few seconds and ask again.";
@@ -1537,7 +1606,8 @@ app.whenReady().then(() => {
   createOverlayWindow();
   if (!SELFTEST) createTray();
   if (!SELFTEST) watchForUninstall();
-  if (!SELFTEST) console.log(`[lefty] brain: ${thinker().ready() ? `connected (${thinker().label()})` : 'no API key yet (add GEMINI_API_KEY to .env)'}`);
+  // The local brain (Ollama on this PC) answers when there's no key or no internet: see whether it's there.
+  if (!SELFTEST) brain.checkLocal().then((local) => console.log(`[lefty] brain: ${thinker().ready() ? `connected (${thinker().label()})` : 'no API key yet (add GEMINI_API_KEY to .env)'}${local ? '; offline backup: the local model' : ''}`));
   // Start the screen reader early so the first Ctrl+Space is fast and it already knows the user's app.
   eyes.start(process.pid).catch((error) => console.log('[lefty] screen reader failed to start:', error.message));
   if (SELFTEST) {

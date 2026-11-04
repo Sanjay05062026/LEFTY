@@ -27,6 +27,7 @@
       <span class="name">Lefty</span>
       <div class="head-tools">
         <button id="speak" class="icon-btn" type="button" aria-pressed="false" title="Lefty talks: off"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg></button>
+        <button id="access" class="access-btn" type="button" aria-label="How free Lefty is in Do it mode"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/></svg><span>Auto</span></button>
         <div id="mode" class="mode" role="radiogroup" aria-label="How Lefty helps">
           <button type="button" role="radio" data-mode="learn" aria-checked="true" title="Lefty points, you click">Learn</button>
           <button type="button" role="radio" data-mode="auto" aria-checked="false" title="Lefty clicks and types for you">Do it</button>
@@ -47,6 +48,8 @@
     <p class="hint">Esc closes · hold Ctrl+Space to talk · F1 explains a button</p>
   </div>
 
+  <script src="../editors.js"></script>
+  <script src="../route.js"></script>
   <script src="match.js"></script>
   <script src="guard.js"></script>
   <script src="auto.js"></script>
@@ -55,7 +58,6 @@
   <script src="voice.js"></script>
   <script src="focus.js"></script>
   <script src="ghost.js"></script>
-  <script src="../editors.js"></script>
   <script src="overlay.js"></script>
 </body>
 </html>

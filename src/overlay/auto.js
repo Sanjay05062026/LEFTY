@@ -2,22 +2,33 @@
 // what stays the user's: choices only they can make (what to name a file), private things (passwords, card numbers),
 // and anything risky (delete, buy, send, install), which Lefty asks about before he does it.
 //
-//   plan(decision) -> { act: 'click', button, count, ask? } | { act: 'type', text, click, ask? } | { act: 'keys', keys, combo, ask? }
+//   plan(decision, access) -> { act: 'click', button, count, ask? } | { act: 'type', text, click, ask? } | { act: 'keys', keys, combo, ask? }
 //                     | { act: 'scroll', notches } | { act: 'skip' } | { act: 'open' } | { act: 'code' } | { act: 'doctor' }
 //                     | { yourTurn: 'choice' | 'private' | 'nothing' }
 //   ask: a warning to show before acting ("This will delete things"); the user says yes or no.
 //   keysFor('Ctrl+Shift+S') -> ['ctrl+shift+s'] (the native helper's spelling), or null for a combo it can't press.
 //   spotOk(label, under) -> false when a spot the AI guessed lands on plain text or a canvas the step doesn't name.
+//   statusFor(plan, decision) -> what Lefty is doing, in a few words, for the status bubble beside him.
 // Pure functions: loaded by the overlay page and by Node tests.
 
 (function (root) {
   const Guard = root.LeftyGuard || require('./guard');
 
-  // Lefty was asking before far too much - buying, sending, installing, signing in, even "Confirm" - and a task
-  // that stops every other step to ask is not doing the task. He gets on with all of it now. The one thing he
-  // still stops for is losing work that cannot be got back: Delete, Don't Save, Empty Recycle Bin, Discard,
-  // Format, and the rest of the click guard's list (guard.js), which already knows "Reset zoom" and
-  // "Remove filter" are harmless.
+  // How free Lefty is is the user's choice now, on the access button (settings.js):
+  //   ask:  a yes before every move
+  //   auto: a yes before moves that lose work or reach outside this PC: the click guard's list (guard.js: Delete,
+  //         Don't Save, Empty Recycle Bin..., which knows "Reset zoom" is harmless), money, sending and posting,
+  //         installing, and dangerous terminal commands. "Confirm", "Next" and "Sign up" are just done: a task
+  //         that stops every other step to ask is not doing the task.
+  //   full: no questions at all
+  // Private boxes are the user's in all three: Lefty can't know a password anyway.
+  const OUTSIDE_RISKS = [
+    { reason: 'spends money', phrases: ['buy', 'buy now', 'pay', 'pay now', 'purchase', 'place order', 'checkout', 'check out', 'subscribe'] },
+    { reason: 'sends it to someone', phrases: ['send', 'send now', 'post', 'publish', 'tweet', 'reply all'] },
+    { reason: 'installs something on this PC', phrases: ['install', 'install now'] },
+  ];
+  // Commands that wipe things or can't be taken back, when Lefty types them.
+  const DANGEROUS_COMMAND = /\b(rm\s+-\w*[rf]|rmdir\s+\/s|rd\s+\/s|del\s+\/[sfq]|remove-item\b.*-recurse|format\s+[a-z]:|mkfs|dd\s+if=|shutdown\b|git\s+push\b.*--force|git\s+reset\s+--hard|git\s+clean\s+-\w*f|drop\s+(table|database)|reg\s+delete|chmod\s+-r\s+777|curl\b.*\|\s*(ba)?sh)/i;
 
   // Boxes whose contents are the user's alone: Lefty never types into them.
   const PRIVATE = /pass(word|code|phrase)|\bpin\b|\bcvv|\bcvc|security code|card number|credit card|debit card|\botp\b|one.time (code|password)|verification code|\bssn\b|social security|bank account|routing number|\biban\b|api key|secret|\btoken\b/i;
@@ -41,7 +52,34 @@
     const step = stepWords(label);
     const risk = (isReal(target) && Guard.riskOf(target)) || (step && Guard.riskOf({ name: step, type: 'Button', enabled: true }));
     if (risk) return risk.warning.replace(/^(Careful!|Heads up:)\s*/, '');
+    for (const words of [isReal(target) ? target.name : '', step]) {
+      const name = normalize(words);
+      const outside = OUTSIDE_RISKS.find((rule) => rule.phrases.some((phrase) => name.includes(` ${phrase} `)));
+      if (outside) return `"${String(words).trim()}" ${outside.reason}`;
+    }
     return null; // nothing else is worth stopping a task for
+  }
+
+  // What Lefty does in a move, in words: as a verb to go in a question (present) or for the status bubble.
+  function moveWords(steps, decision) {
+    const t = decision && decision.target;
+    const name = String((t && t.type !== 'Spot' && t.type !== 'Area' && t.name) || stepWords(decision && decision.label) || '').trim().slice(0, 40);
+    const text = String(steps.text || '');
+    switch (steps.act) {
+      case 'click': return [steps.button === 'right' ? 'right-click' : steps.count === 2 ? 'double-click' : 'click', name];
+      case 'type': return ['type', `"${text.length > 30 ? `${text.slice(0, 30)}…` : text}"`];
+      case 'keys': return ['press', steps.combo];
+      case 'scroll': return ['scroll', steps.notches > 0 ? 'up' : 'down'];
+      default: return null;
+    }
+  }
+
+  // What Lefty is doing right now, for the status bubble beside him: "Clicking Save…".
+  function statusFor(steps, decision) {
+    const words = steps && moveWords(steps, decision);
+    if (!words) return '';
+    const verb = words[0].replace(/e$/, '');
+    return `${verb[0].toUpperCase()}${verb.slice(1)}ing ${words[1]}…`;
   }
 
   // The step's own words without the verb and emoji: "Click Buy now" -> "Buy now".
@@ -107,7 +145,17 @@
     return keys.some((k) => name.has(k));
   }
 
-  function plan(decision) {
+  // What Lefty does for this step, with the question the user's access setting calls for.
+  function plan(decision, access = 'auto') {
+    const steps = moves(decision);
+    if (!MOVES.has(steps.act) || access === 'auto') return steps;
+    if (access === 'full') return { ...steps, ask: null };
+    return { ...steps, ask: steps.ask || `I'm about to ${moveWords(steps, decision).join(' ')}` };
+  }
+  const MOVES = new Set(['click', 'type', 'keys', 'scroll']);
+  const PRESSED_NOT_TYPED = new Set(['Button', 'MenuItem', 'CheckBox', 'RadioButton', 'SplitButton', 'Hyperlink', 'Link', 'Tab', 'TabItem']);
+
+  function moves(decision) {
     if (!decision) return { yourTurn: 'nothing' };
     const { kind, target, label } = decision;
     const action = decision.action || 'click';
@@ -119,7 +167,10 @@
     if (kind === 'type' || (kind === 'tell' && action === 'type')) {
       if (decision.private || isPrivateBox(target, label)) return { yourTurn: 'private' };
       if (!text) return { yourTurn: 'choice' }; // what to type is the user's choice ("Name it anything")
-      return { act: 'type', text, click: Boolean(target), ask: needsOk(null, label) };
+      const command = DANGEROUS_COMMAND.test(text) ? `"${text.slice(0, 60)}" is a dangerous command` : null;
+      // Only a box takes a click before typing: pressing Calculator's "1" and then typing 12*8= gives 112*8.
+      const click = Boolean(target) && !PRESSED_NOT_TYPED.has(target.type);
+      return { act: 'type', text, click, ask: command || needsOk(null, label) };
     }
     if (kind === 'tell') {
       const keys = action === 'key' ? keysFor(text) : null;
@@ -137,7 +188,7 @@
     };
   }
 
-  const api = { plan, needsOk, isPrivateBox, keysFor, stripEmoji, spotOk };
+  const api = { plan, needsOk, isPrivateBox, keysFor, stripEmoji, spotOk, statusFor };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.LeftyAuto = api;
 })(this);

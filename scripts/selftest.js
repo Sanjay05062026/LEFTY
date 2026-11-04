@@ -173,13 +173,24 @@ async function run({ app, mainWindow, overlayWindow, showLefty, toDip, handleCli
     check(/What next/.test(await waitForMessage(/What next/, 'the chat after Do it')) && !/You did it/.test(await lastMessage()), 'Do it: the chat says what next, not "You did it"');
     check(autoActions.length === 2, 'Do it: exactly two clicks, nothing pressed twice');
 
-    // The user's own click while Lefty works stops him; Continue carries on from where he was.
+    // Do it mode shows no highlight, and the status bubble says what he's doing.
+    autoActions.length = 0;
+    const statuses = [];
+    const watchStatus = setInterval(async () => { const t = await js("document.getElementById('steptag').textContent").catch(() => ''); if (t && statuses[statuses.length - 1] !== t) statuses.push(t); }, 40);
+    await submit('start > search');
+    await waitForTag(/Done/, 'done, watching the status');
+    clearInterval(watchStatus);
+    check(!(await js("document.getElementById('ring').classList.contains('show')")), 'Do it: no highlight ring');
+    check(statuses.some((s) => /Clicking Start…/.test(s)) && statuses.some((s) => /Clicking Search…/.test(s)), `Do it: the status says each move (${statuses.join(' | ')})`);
+
+    // Using the PC while Lefty works doesn't stop him: only the Stop chip does, and Continue carries on.
     autoActions.length = 0;
     await submit('start > search');
     await waitFor(async () => autoActions.length, (n) => n >= 1, 8000, 'the first click');
     userInput('mouse');
-    const stopped = await waitForMessage(/took over/, 'the stop message after the user clicked');
-    check(true, `a click from the user stops Lefty: "${stopped}"`);
+    await js("document.getElementById('modechip').click(); true");
+    const stopped = await waitForMessage(/Stopped/, 'the stop message after the Stop chip');
+    check(true, `the Stop chip stops Lefty: "${stopped}"`);
     await sleep(1500);
     check(autoActions.length === 1, 'nothing more is clicked after he stopped');
     check(!(await bubbleTucked()) && !(await chipState()).show, 'the chat is back with Continue, and the Stop chip is gone');
@@ -188,13 +199,31 @@ async function run({ app, mainWindow, overlayWindow, showLefty, toDip, handleCli
     check(autoActions[1].expect === 'Search', 'after Continue, Lefty goes on with Search (Start was already done)');
     await waitForTag(/Done/, 'done after Continue');
 
-    // Esc stops him too (and doesn't close him), and "Guide me instead" goes on in Learn mode.
+    // Ask every time: a yes before each move, with the ring on what he'd click. Full access: no questions.
+    await setSettings({ access: 'ask' });
+    autoActions.length = 0;
+    await submit('start > search');
+    await waitForMessage(/about to click Start/, 'the question before the first click');
+    check(autoActions.length === 0 && await js("document.getElementById('ring').classList.contains('show')"), 'Ask every time: nothing is clicked before the yes, and the ring shows what would be');
+    check(await pickChoice('Yes, do it'), 'Ask every time: the yes is offered');
+    await waitFor(async () => autoActions.length, (n) => n >= 1, 8000, 'the click after the yes');
+    await waitForMessage(/about to click Search/, 'the question before the second click');
+    check(autoActions.length === 1, 'Ask every time: the next move asks again');
+    check(await pickChoice('Stop'), 'Ask every time: Stop is offered');
+    await setSettings({ access: 'full' });
+    autoActions.length = 0;
+    await submit('start > search');
+    await waitForTag(/Done/, 'done with full access');
+    check(autoActions.length === 2, 'Full access: both clicks with no question');
+    await setSettings({ access: 'auto' });
+
+    // Stopped again, "Guide me instead" goes on in Learn mode.
     autoActions.length = 0;
     await submit('start > search');
     await waitFor(async () => autoActions.length, (n) => n >= 1, 8000, 'the first click');
-    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true");
-    await waitForMessage(/Stopped/, 'the stop message after Esc');
-    check(await js("document.getElementById('lefty').classList.contains('show')"), 'Esc while Lefty works stops him without closing him');
+    await js("document.getElementById('modechip').click(); true");
+    await waitForMessage(/Stopped/, 'the stop message');
+    check(await js("document.getElementById('lefty').classList.contains('show')"), 'Stop leaves Lefty on screen');
     check(await pickChoice('Guide me instead'), '"Guide me instead" is offered');
     check(/^2\/2Search$/.test(await waitForTag(/2\/2/, 'the Search step in Learn mode')), 'in Learn mode he points at Search for the user');
     check(await js('settings.mode') === 'learn' && autoActions.length === 1, 'the mode is Learn now, and Lefty clicks nothing himself');
