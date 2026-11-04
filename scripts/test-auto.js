@@ -196,6 +196,7 @@ check(needsOk(null, '') === null && needsOk(el('OK'), 'Click OK') === null, 'OK 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lefty-settings-'));
   const file = path.join(dir, 'settings.json');
   let settings = createSettings(file);
+  check(settings.get().brain === 'auto' && settings.set({ brain: 'local' }).brain === 'local' && settings.set({ brain: 'nonsense' }).brain === 'local' && settings.set({ brain: 'auto' }), 'settings: the brain is Auto or Local, nothing else');
   check(settings.get().access === 'auto' && settings.set({ access: 'nonsense' }).access === 'auto' && settings.set({ access: 'full' }).access === 'full' && settings.set({ access: 'auto' }), 'settings: access is Auto by default, and only the three choices are kept');
   check(JSON.stringify(settings.get()) === JSON.stringify(DEFAULTS), 'settings: Learn and normal size the first time');
   settings.set({ mode: 'auto', size: 'large', other: 'x' });

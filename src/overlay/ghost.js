@@ -5,6 +5,7 @@
 //   ghost.update({ ln, col })  -> { row, total, items: [{ row, col, text, current }], lineDone, finished, waiting? }
 //                                 | { off: true }
 //   ghost.lock()                  typing started: the code stays where it is
+//   columnOneX(line, col, charWidth) -> where column 1 is on screen, from the rect the editor reports
 //
 // The editor won't share its text (VS Code hides it outside screen-reader mode), only the cursor's line and column
 // (the status bar's "Ln 12, Col 5"). So progress is worked out from the cursor: on a line, the cursor's column
@@ -75,7 +76,11 @@
     };
   }
 
-  const api = { track };
+  // Where column 1 is on screen. Some editors report the whole line, but VS Code now reports just the cursor, a box
+  // a pixel or two wide that moves with every letter: taken for the line's start, it pushes the code along as they type.
+  const columnOneX = (line, col, charWidth) => (line.w <= 2 ? line.x - (col - 1) * charWidth : line.x);
+
+  const api = { track, columnOneX };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.LeftyGhost = api;
 })(this);

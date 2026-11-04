@@ -2,6 +2,7 @@
 //   mode: 'learn' (Lefty points, the user clicks) or 'auto' (Do it: Lefty clicks and types for the user)
 //   access: how free Lefty is in Do it mode: 'ask' (a yes before every move), 'auto' (a yes before risky moves only)
 //           or 'full' (no questions). Passwords and card numbers stay the user's in all three.
+//   brain: 'auto' (Gemini, with the local model when offline) or 'local' (only the models on this PC)
 //   size: 'small' | 'normal' | 'large' (how big Lefty is drawn on screen)
 //   speak: 'off' | 'on' (Lefty reads his answers and steps out loud)
 //   privateApps: process names ("keepass", "1password") where Lefty never sends a screenshot or code to the AI
@@ -9,8 +10,8 @@
 
 const fs = require('fs');
 
-const DEFAULTS = { mode: 'learn', access: 'auto', size: 'normal', speak: 'off', privateApps: [] };
-const ALLOWED = { mode: ['learn', 'auto'], access: ['ask', 'auto', 'full'], size: ['small', 'normal', 'large'], speak: ['off', 'on'] };
+const DEFAULTS = { mode: 'learn', access: 'auto', brain: 'auto', size: 'normal', speak: 'off', privateApps: [] };
+const ALLOWED = { mode: ['learn', 'auto'], access: ['ask', 'auto', 'full'], brain: ['auto', 'local'], size: ['small', 'normal', 'large'], speak: ['off', 'on'] };
 const MAX_PRIVATE_APPS = 50;
 
 // "KeePass.exe " -> "keepass". Null for anything that can't be a process name.

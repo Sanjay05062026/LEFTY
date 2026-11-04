@@ -183,7 +183,8 @@ function disableShortcut() {
 
 eyes.onScreenMode(({ fullscreen, process: name }) => {
   if (SELFTEST) return; // the self-test checks detection itself and must not react to the user's screen
-  if (fullscreen) {
+  // An installed Lefty's own overlay covers the screen too. It isn't a game, and pausing for it hid this copy's bubble.
+  if (fullscreen && !/^lefty$/i.test(String(name || ''))) {
     fullscreenApp = name || 'a fullscreen app';
     hideLefty();
     console.log(`[lefty] ${fullscreenApp} is fullscreen: Ctrl+Space paused so it goes to the app`);
@@ -277,7 +278,7 @@ function createMainWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'Lefty',
-    backgroundColor: '#FFF9F2',
+    backgroundColor: '#F1F8F7',
     autoHideMenuBar: true,
     show: !SELFTEST && !STARTED_HIDDEN,
     icon: ICON,
@@ -474,11 +475,13 @@ ipcMain.on('lefty:request-hide', hideLefty);
 // not made again). In Do it mode the home window stays where it is and shows how the task goes. In Learn mode it steps
 // aside: the user needs to see what he points at.
 let homeTask = null; // what a task from the main page is doing right now
-ipcMain.handle('home:ask', (_event, { goal, chatId } = {}) => {
-  const text = String(goal || '').trim().slice(0, 2000);
+ipcMain.handle('home:ask', (_event, { goal, chatId, attachments } = {}) => {
+  const files = Array.isArray(attachments) ? attachments.slice(0, MAX_ATTACHMENTS) : [];
+  const text = String(goal || '').trim().slice(0, 2000) || (files.length ? 'Tell me what this is and what matters in it.' : '');
   if (!text) return { ok: false };
-  if (route.wantsChat(text) && !SELFTEST && thinker().chat) { // Lefty's backend has no chat route yet: it stays a goal
-    answerInChat(text, chatId || null).catch((error) => console.log('[lefty] chat failed:', error.message));
+  // A file comes with a question about it, so it is always answered in words.
+  if ((files.length || route.wantsChat(text)) && !SELFTEST && thinker().chat) { // Lefty's backend has no chat route yet: it stays a goal
+    answerInChat(text, chatId || null, { attachments: files }).catch((error) => console.log('[lefty] chat failed:', error.message));
     return { ok: true, kind: 'chat' };
   }
   const go = () => {
@@ -498,7 +501,7 @@ ipcMain.on('task:status', (_event, status) => {
 });
 
 // The answer in the home window, word by word, kept in the chat. saved: the question is already in it (asked in the bubble).
-async function answerInChat(goal, chatId, { saved = false } = {}) {
+async function answerInChat(goal, chatId, { saved = false, attachments = [] } = {}) {
   const tell = (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('chat:stream', event); };
   let id = chatId;
   if (!id) {
@@ -507,12 +510,12 @@ async function answerInChat(goal, chatId, { saved = false } = {}) {
   }
   const old = id ? await history.get(id).catch(() => null) : null;
   const before = (old && old.ok && old.chat ? old.chat.messages : []).slice(-12).map((m) => `${m.role === 'user' ? 'User' : 'Lefty'}: ${String(m.text).slice(0, 600)}`);
-  if (id && !saved) await history.add(id, 'user', goal);
+  if (id && !saved) await history.add(id, 'user', attachments.length ? `${goal}\n[Added: ${attachments.map((a) => a.name).join(', ')}]` : goal);
   historyChanged();
   tell({ type: 'start', chatId: id });
   const started = Date.now();
   try {
-    const { text, usage } = await thinker().chat({ goal, earlier: saved ? before.slice(0, -1) : before, onText: (piece) => tell({ type: 'text', text: piece }) });
+    const { text, usage } = await thinker().chat({ goal, attachments, earlier: saved ? before.slice(0, -1) : before, onText: (piece) => tell({ type: 'text', text: piece }) });
     console.log(`[lefty] chat (${thinker().label()}, ${Date.now() - started} ms, ${(usage && usage.output) || 0} out)`);
     if (id) await history.add(id, 'lefty', text);
     tell({ type: 'end' });
@@ -522,6 +525,67 @@ async function answerInChat(goal, chatId, { saved = false } = {}) {
   }
   historyChanged();
 }
+
+/* ---------- Adding things to a message (the folder button) ----------
+   Images and PDFs go to the AI as they are, text files inside the message. Nothing is read until the user picks it, and
+   the picture of the screen follows the same private-app rule as every other screenshot. */
+const MAX_ATTACHMENTS = 4;
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+const MAX_ATTACHMENT_TEXT = 100 * 1024;
+const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+const TEXT_FILES = ['txt', 'md', 'csv', 'json', 'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'cs', 'go', 'rs', 'html', 'css', 'sql', 'xml', 'yml', 'yaml', 'log'];
+const PICKERS = {
+  image: { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
+  pdf: { name: 'PDF files', extensions: ['pdf'] },
+  file: { name: 'Documents and code', extensions: [...TEXT_FILES, 'pdf', 'png', 'jpg', 'jpeg', 'webp'] },
+};
+
+function readAttachment(file) {
+  const name = path.basename(file);
+  const ext = path.extname(file).toLowerCase();
+  const { size } = fs.statSync(file);
+  if (size > MAX_ATTACHMENT_BYTES) return { ok: false, error: `${name} is too big. The limit is 15 MB.` };
+  if (IMAGE_TYPES[ext] || ext === '.pdf') return { ok: true, name, mime: IMAGE_TYPES[ext] || 'application/pdf', data: fs.readFileSync(file).toString('base64') };
+  if (TEXT_FILES.includes(ext.slice(1))) return { ok: true, name, mime: 'text/plain', text: fs.readFileSync(file, 'utf8').slice(0, MAX_ATTACHMENT_TEXT) };
+  return { ok: false, error: `I can't read ${ext || 'that kind of'} files yet.` };
+}
+
+ipcMain.handle('attach:pick', async (_event, kind) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, { title: 'Add to your message', properties: ['openFile'], filters: [PICKERS[kind] || PICKERS.file] });
+  if (canceled || !filePaths[0]) return { ok: false, canceled: true };
+  try {
+    return readAttachment(filePaths[0]);
+  } catch (error) {
+    console.log(`[lefty] could not read the file: ${error.message}`);
+    return { ok: false, error: "I couldn't read that file." };
+  }
+});
+
+// The home window steps aside for a moment, so the picture shows the screen and not Lefty.
+ipcMain.handle('attach:screen', async () => {
+  mainWindow.minimize();
+  await sleep(SUMMON_DELAY_MS);
+  try {
+    const seen = await readApp();
+    if (keepPrivate(seen)) return { ok: false, error: "That app is on your private list, so I didn't take a picture." };
+    const { jpeg } = await captureScreen(screen.getPrimaryDisplay());
+    return { ok: true, name: 'My screen', mime: 'image/jpeg', data: jpeg.toString('base64') };
+  } catch (error) {
+    console.log(`[lefty] could not capture the screen: ${error.message}`);
+    return { ok: false, error: "I couldn't take a picture of the screen." };
+  } finally {
+    openHome();
+  }
+});
+
+// What the sidebar says about the brain.
+ipcMain.handle('brain:status', async () => {
+  if (thinker() === remoteBrain) return thinker().label();
+  await brain.checkLocal();
+  const provider = brain.provider();
+  if (provider === 'local') return `Local: ${brain.label().replace(/^local:\s*/, '')}`;
+  return provider ? 'Online: Gemini' : 'No AI connected';
+});
 
 // A question asked in the bubble that has nothing to do with the screen: no screenshot, nothing clicked. On a busy
 // screen the step brain went looking for something to do with it ("the capital of France" pressed a Send button).
@@ -1031,8 +1095,14 @@ ipcMain.handle('auto:code', async (_event, { code, file }) => {
 /* ---------- Settings ----------
    Learn or Do it mode, Lefty's size, speaking and the private apps: changed from the chat bubble or the home screen,
    saved, and sent to both. */
+// The brain picked in the main window: 'local' keeps every answer on this PC.
+function useBrain(choice) {
+  if (choice === 'local') process.env.LEFTY_BRAIN = 'local';
+  else delete process.env.LEFTY_BRAIN;
+}
 ipcMain.handle('settings:get', () => settings.get());
 ipcMain.handle('settings:set', (_event, changes) => {
+  if (changes && changes.brain) useBrain(changes.brain);
   const now = settings.set(changes || {});
   console.log(`[lefty] settings: mode ${now.mode}, size ${now.size}, speak ${now.speak}, ${now.privateApps.length} private app(s)`);
   for (const win of [mainWindow, overlayWindow]) if (win && !win.isDestroyed()) win.webContents.send('settings:changed', now);
@@ -1079,6 +1149,7 @@ async function captureScreen(display) {
 function friendlyBrainError(error) {
   const status = error && error.status;
   if (error && error.message === 'no API key') return "The AI isn't connected: there's no API key, and no local model is running.";
+  if (error && error.pdf) return 'Reading a PDF needs the internet. Connect, or send a picture of the page instead.';
   if (error && error.local) { // the local brain on this PC (no internet, or no key)
     if (error.voice) return "I'm offline, and I need the internet to hear you. Type your goal instead.";
     if (error.down) return "I'm offline and my local model isn't running. Start Ollama and try again.";
@@ -1405,9 +1476,9 @@ function readProject(folder) {
   return files;
 }
 
-ipcMain.handle('build:suggest', (_event, name) => {
+// A new project gets a folder of its own: "website", then "website-2", never one that already has files in it.
+function freshFolder(name) {
   const slug = String(name || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'my-project';
-  // A new project gets a folder of its own: "website", then "website-2", never one that already has files in it.
   const base = path.join(app.getPath('documents'), 'Lefty Projects', slug);
   const taken = (folder) => { try { return fs.readdirSync(folder).length > 0; } catch { return false; } };
   for (let n = 1; n < 100; n += 1) {
@@ -1415,7 +1486,9 @@ ipcMain.handle('build:suggest', (_event, name) => {
     if (!taken(folder)) return folder;
   }
   return `${base}-${Date.now()}`;
-});
+}
+
+ipcMain.handle('build:suggest', (_event, name) => freshFolder(name));
 
 ipcMain.handle('build:pick', async (_event, current) => {
   if (SELFTEST) return { ok: false };
@@ -1476,11 +1549,60 @@ ipcMain.handle('build:open', async (_event, { folder: wanted, how } = {}) => {
   }
   if (how === 'code') {
     const opened = await new Promise((resolve) => {
-      execFile('cmd.exe', ['/d', '/c', 'code', folder], { windowsHide: true }, (error) => resolve(!error));
+      execFile('cmd.exe', ['/d', '/c', 'code', '-n', folder], { windowsHide: true }, (error) => resolve(!error));
     });
     if (opened) return { ok: true };
   }
   return { ok: !(await shell.openPath(folder)) };
+});
+
+const CODE_WINDOW_WAIT_MS = 20000;
+const CODE_WINDOW_TRIES = 4;
+const run = (file, args) => new Promise((resolve) => { execFile(file, args, { windowsHide: true }, (error) => resolve(!error)); });
+
+// A program asked for by name: a new folder under Documents\Lefty Projects holding one file, opened in a VS Code
+// window of its own. code is '' in Learn mode, where the user types it under a starter comment. Another editor in front keeps the job, and
+// main refuses before anything is made, so the overlay can carry on in place.
+ipcMain.handle('code:folder', async (_event, { name, file, code = '' } = {}) => {
+  if (SELFTEST) return { ok: false, error: 'selftest' };
+  const rel = brain.safePath(path.basename(String(file || '')));
+  if (!rel) return { ok: false, error: 'no-file-name' };
+  const front = String((await eyes.caret(readHwnd).catch(() => ({}))).process || '').toLowerCase();
+  if (front !== 'code' && editors.isKnown(front)) return { ok: false, error: 'another-editor' };
+  if (!await run('where.exe', ['code'])) return { ok: false, error: 'no-vscode' };
+  try {
+    const folder = freshFolder(name || path.parse(rel).name);
+    const full = path.join(folder, rel);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(full, `${code ? String(code).replace(/\s*$/, '') : editors.starterLine(rel)}\n`);
+    if (!await run('cmd.exe', ['/d', '/c', 'code', '-n', folder, full])) return { ok: false, error: 'vscode-did-not-open' };
+    const end = Date.now() + CODE_WINDOW_WAIT_MS;
+    let opened = null;
+    while (!opened && Date.now() < end) {
+      opened = (await eyes.windows().catch(() => [])).find((w) => String(w.title).includes(rel) && String(w.title).includes(path.basename(folder)));
+      if (!opened) await sleep(250);
+    }
+    if (!opened) return { ok: false, error: 'vscode-did-not-open' };
+    await settle(opened.hwnd, 'The new VS Code window');
+    // It can open behind the app the user was in, and ghost code needs the cursor in the file.
+    doctorHwnd = opened.hwnd;
+    // Windows can fail a cursor lookup while a window is new. The folder is made by now, so that must never count as
+    // the folder failing: the overlay would fall back to the project the user had open.
+    const findCursor = () => editorInFront().catch((error) => ({ error: error.message }));
+    let inFile = await findCursor();
+    for (let tries = 1; inFile.error && tries < CODE_WINDOW_TRIES; tries += 1) {
+      await sleep(400);
+      inFile = await findCursor();
+    }
+    doctorHwnd = null;
+    if (inFile.error) console.log(`[lefty] the new VS Code window did not come forward: ${inFile.error}`);
+    else if (!code) await press(opened.hwnd, ['ctrl+end', 'wait:150']).catch(() => {}); // the line under the starter comment
+    console.log(`[lefty] new folder for the code: ${full}`);
+    return { ok: true, folder, name: path.basename(folder), file: rel };
+  } catch (error) {
+    console.log(`[lefty] could not make a folder for the code: ${error.message}`);
+    return { ok: false, error: 'failed' };
+  }
 });
 
 /* ---------- The app a goal is about ----------
@@ -1602,6 +1724,7 @@ app.whenReady().then(() => {
   if (!SELFTEST) setTimeout(() => loadStartApps(), 3000); // ready before anyone asks, without slowing the start
   remoteBrain.setDevice(deviceId());
   settings = createSettings(path.join(app.getPath('userData'), 'settings.json'));
+  useBrain(settings.get().brain);
   createMainWindow();
   createOverlayWindow();
   if (!SELFTEST) createTray();

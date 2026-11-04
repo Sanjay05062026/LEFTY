@@ -85,14 +85,16 @@ Rules:
   "need_user" with one short question in message, e.g. "What should I help you with in VS Code?". Never
   pretend something is done.
 - If the clickable list is empty, the app's buttons couldn't be read: point from the screenshot with point.
-- If the user wants code written ("single linked list", "write bubble sort in java", "code to reverse a string")
-  and a code editor (VS Code) is in front: action "write_code" with the complete, correct, runnable code in code.
+- If the user wants code written ("single linked list", "write bubble sort in java", "code to reverse a string"):
+  action "write_code" with the complete, correct, runnable code in code, whatever app is in front. Never open_app
+  VS Code first: Lefty makes a new folder and opens VS Code on it himself. Only another editor the user names
+  (PyCharm, Notepad++) is opened first.
   Lefty shows it as faint ghost text at the user's text cursor and they type over it, so: plain code only (no
   markdown fences, no explanation around it), 4-space indents, short lines, a few short comments are fine, at
   most 60 lines. Use the language they ask for, else the open file's language (from its name in the window
   title), else Python. Also give file: a short name for a file of its own, with the right extension
-  ("linear_search.py", "Stack.java"), because Lefty writes the code into a new file and never into the one the
-  user has open. instruction: e.g. "Type along with me". Do this right away, even with no file open.
+  ("linear_search.py", "Stack.java"), because Lefty gives the code a new folder and never touches the file or
+  project the user has open. instruction: e.g. "Type along with me". Do this right away, even with no file open.
 - If the user wants errors or bugs in their code found or fixed ("find the error", "why doesn't this work", "fix my
   code") and a code editor is in front: action "check_code", instruction e.g. "Checking your code". Lefty reads the
   whole file himself, finds the errors, shows each one and offers to fix it.
@@ -569,7 +571,7 @@ function firstApp(goal) {
   const app = localAppGoal(String(goal).split(/\s+(?:and|then)\s+|,\s*|;\s*/i)[0]);
   return KNOWN_APPS.test(app) ? app : '';
 }
-const localCodeGoal = (goal) => /\b(write|create|make|generate|give me|show me)\b.*\b(function|code|program|script|class|algorithm|linked list)\b/i.test(goal) && !/\b(website|web ?site|web ?app|project)\b/i.test(goal);
+const localCodeGoal = (goal) => /\b(write|create|make|generate|give me|show me)\b.*(\b(function|code|program|script|class|algorithm|linked list)\b|\bin (python|java|javascript|typescript|c|c\+\+|c#|go|rust)(\s|$))/i.test(goal) && !/\b(website|web ?site|web ?app|project)\b/i.test(goal);
 const localBuildGoal = (goal) => /\b(build|create|make|generate|design)\b.*\b(website|web ?site|web ?page|web ?app|landing page|project|game)\b/i.test(goal);
 const localQuestion = (goal) => /\?\s*$|^(what|who|when|where|why|which|calculate|explain|define|how (much|many|long|far|old|big))\b/i.test(String(goal).trim());
 const CODE_FILES = { python: 'code.py', javascript: 'code.js', typescript: 'code.ts', java: 'Main.java', 'c++': 'code.cpp', cpp: 'code.cpp', 'c#': 'Code.cs', html: 'index.html', go: 'main.go', rust: 'main.rs' };
@@ -604,7 +606,9 @@ async function nextStep({ goal, history, note, app, title, elements, display, jp
   if (!ready()) throw new Error('no API key');
   const voice = audio && /^audio\/[\w.+-]+$/.test(String(audio.mime || '')) && typeof audio.data === 'string' && audio.data ? audio : null;
   const quick = !voice && !history.length && !note ? firstApp(goal) : '';
-  if (quick && !`${app} ${title}`.toLowerCase().replace(/\s/g, '').includes(quick.toLowerCase().replace(/\s/g, ''))) {
+  // "open VS Code and write a calculator": the code brings its own VS Code window, so a second one isn't opened first.
+  const codeBringsEditor = /^(vs ?code|visual studio code)$/i.test(quick) && localCodeGoal(goal);
+  if (quick && !codeBringsEditor && !`${app} ${title}`.toLowerCase().replace(/\s/g, '').includes(quick.toLowerCase().replace(/\s/g, ''))) {
     return { status: 'step', action: 'open_app', instruction: `Open ${quick}`, text: '', message: '', app: quick, code: '', file: '', target: null, heard: '', lang: '', usage: { input: 0, output: 0 } };
   }
   const done = history.length ? history.map((step, i) => `${i + 1}. ${step}`).join('\n') : '(nothing yet)';
@@ -642,6 +646,11 @@ async function nextStep({ goal, history, note, app, title, elements, display, jp
   // "Click Install" with nothing to point at is no help to someone looking for the button: ask once more.
   if (step.status === 'step' && POINTED_ACTIONS.includes(step.action || 'click') && !target) {
     ({ step, pointScale, usage } = await ask(`${text}\n\nYour last answer said "${firstLine(step.instruction, 60)}" but gave no element_id or point. Point at it.`));
+    target = targetOf(step, pointScale);
+  }
+  // Told not to, the model still opens VS Code first now and then, which would leave a second window behind.
+  if (step.status === 'step' && step.action === 'open_app' && /^(vs ?code|visual studio code)$/i.test(String(step.app).trim()) && localCodeGoal(goal)) {
+    ({ step, pointScale, usage } = await ask(`${text}\n\nYour last answer was open_app, but Lefty opens VS Code himself. Answer write_code with the whole code in code.`));
     target = targetOf(step, pointScale);
   }
   if (step.status === 'step' && step.action === 'write_code' && !cleanCode(step.code)) {
@@ -1059,7 +1068,7 @@ async function readLines(response, onLine) {
   if (pending.trim()) onLine(pending.trim());
 }
 
-async function geminiStream(model, apiKey, { goal, earlier }, onText) {
+async function geminiStream(model, apiKey, { goal, earlier, attachments = [] }, onText) {
   const level = thinkingFor.get(model) || 'minimal';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -1069,7 +1078,7 @@ async function geminiStream(model, apiKey, { goal, earlier }, onText) {
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: CHAT_SYSTEM }] },
-        contents: [{ role: 'user', parts: [{ text: chatPrompt(goal, earlier) }] }],
+        contents: [{ role: 'user', parts: [...attachments.filter((a) => a.data).map((a) => ({ inlineData: { mimeType: a.mime, data: a.data } })), { text: chatPrompt(goal, earlier, attachments) }] }],
         generationConfig: { temperature: 0.4, maxOutputTokens: CHAT_MAX_TOKENS, ...(level !== 'none' ? { thinkingConfig: { thinkingLevel: level } } : {}) },
       }),
       signal: controller.signal,
@@ -1093,9 +1102,17 @@ async function geminiStream(model, apiKey, { goal, earlier }, onText) {
   }
 }
 
-const chatPrompt = (goal, earlier = []) => [earlier.length ? `The chat so far:\n${earlier.join('\n')}` : '', String(goal)].filter(Boolean).join('\n\n');
+// Text files travel inside the prompt; images and PDFs go alongside it.
+const chatPrompt = (goal, earlier = [], attachments = []) => [
+  earlier.length ? `The chat so far:\n${earlier.join('\n')}` : '',
+  ...attachments.filter((a) => a.text).map((a) => `File "${a.name}":\n${a.text}`),
+  String(goal),
+].filter(Boolean).join('\n\n');
 
-async function localStream({ goal, earlier }, onText) {
+async function localStream({ goal, earlier, attachments = [] }, onText) {
+  // The local models read pictures, not PDF files.
+  if (attachments.some((a) => a.mime === 'application/pdf')) throw Object.assign(new Error('a PDF needs the internet'), { local: true, pdf: true });
+  const images = attachments.filter((a) => a.data).map((a) => a.data);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOCAL_TIMEOUT_MS);
   try {
@@ -1105,7 +1122,7 @@ async function localStream({ goal, earlier }, onText) {
       body: JSON.stringify({
         model: localModel(), stream: true, keep_alive: '30m',
         options: { temperature: 0.4, num_ctx: LOCAL_CTX, num_predict: LOCAL_MAX_TOKENS },
-        messages: [{ role: 'system', content: CHAT_SYSTEM }, { role: 'user', content: chatPrompt(goal, earlier) }],
+        messages: [{ role: 'system', content: CHAT_SYSTEM }, { role: 'user', content: chatPrompt(goal, earlier, attachments), ...(images.length ? { images } : {}) }],
       }),
       signal: controller.signal,
     });
@@ -1127,11 +1144,11 @@ async function localStream({ goal, earlier }, onText) {
 }
 
 // goal: the question; earlier: ["User: ...", "Lefty: ..."]; onText: called with each new piece. Returns { text, usage }.
-async function chat({ goal, earlier = [], onText = () => {} }) {
+async function chat({ goal, earlier = [], attachments = [], onText = () => {} }) {
   if (!ready()) throw new Error('no API key');
   let text = '';
   const piece = (words) => { const clean = words.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, ''); text += clean; if (clean) onText(clean); };
-  const request = { goal, earlier };
+  const request = { goal, earlier, attachments };
   const local = async () => ({ usage: await localStream(request, piece) });
   let result = null;
   if (localFirst() && (localUp || await checkLocal())) result = await local();

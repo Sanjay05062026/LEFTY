@@ -51,6 +51,9 @@ contextBridge.exposeInMainWorld('lefty', {
   onFocus: (callback) => ipcRenderer.on('focus:changed', (_event, state) => callback(state)),
   onFocusNotice: (callback) => ipcRenderer.on('focus:notice', (_event, notice) => callback(notice)),
   homeAsk: (request) => ipcRenderer.invoke('home:ask', request),
+  attachPick: (kind) => ipcRenderer.invoke('attach:pick', kind),
+  attachScreen: () => ipcRenderer.invoke('attach:screen'),
+  brainStatus: () => ipcRenderer.invoke('brain:status'),
   onChatStream: (callback) => ipcRenderer.on('chat:stream', (_event, data) => callback(data)),
   taskStatus: (status) => ipcRenderer.send('task:status', status),
   onTaskStatus: (callback) => ipcRenderer.on('task:status', (_event, status) => callback(status)),
@@ -73,6 +76,7 @@ contextBridge.exposeInMainWorld('lefty', {
   pickFolder: (current) => ipcRenderer.invoke('build:pick', current),
   buildProject: (request) => ipcRenderer.invoke('build:run', request),
   openProject: (request) => ipcRenderer.invoke('build:open', request),
+  codeFolder: (request) => ipcRenderer.invoke('code:folder', request),
   // Settings (both windows): { mode: 'learn' | 'auto', size: 'small' | 'normal' | 'large', speak: 'off' | 'on', privateApps: [] }
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (changes) => ipcRenderer.invoke('settings:set', changes),
