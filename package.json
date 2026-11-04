@@ -1,6 +1,6 @@
 {
   "name": "lefty",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Lefty: a friendly AI cursor that points you to the next step in any app.",
   "main": "src/main.js",
   "private": true,

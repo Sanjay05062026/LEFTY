@@ -39,10 +39,6 @@
   const normalize = (text) => ` ${String(text || '').toLowerCase().replace(/[’']/g, '').replace(/\bdo not\b/g, 'dont')
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
 
-  // Kept so the tests and callers still have it: nothing is an "ask" phrase any more, only the click guard's
-  // destructive names stop Lefty now.
-  function askPhrase() { return null; }
-
   const isReal = (target) => Boolean(target) && target.type !== 'Spot' && target.type !== 'Area';
 
   // Why Lefty should ask before doing this step, or null. Looks at the thing he would click and at the step's words
