@@ -245,6 +245,15 @@ const jpeg = Buffer.from('fake image');
   step = await ask({ goal: 'hello world' });
   check(calls.length === 2 && /code was empty/.test(calls[1].body.contents[0].parts[1].text) && step.code === 'print(1)', 'a code answer without code is asked again');
 
+  // The model opens VS Code first despite the rule: asked once more, so a second window isn't left behind.
+  calls = [];
+  plan = { 'gemini-3.6-flash': [
+    { reply: geminiAnswer({ status: 'step', action: 'open_app', instruction: 'Open VS Code', element_id: 0, app: 'Visual Studio Code' }) },
+    { reply: geminiAnswer({ status: 'step', action: 'write_code', instruction: 'Type along', element_id: 0, code: 'print(1)', file: 'calc.py' }) },
+  ] };
+  step = await ask({ goal: 'write a calculator program in vscode' });
+  check(calls.length === 2 && step.action === 'write_code' && step.code === 'print(1)', 'a code goal is never held up opening VS Code first');
+
   // A write_code answer with no code: asked again, and if the step request still has no room for it, the code
   // is asked for on its own. Lefty saying "I couldn't write that code, ask me again" was this giving up.
   calls = [];
@@ -429,6 +438,7 @@ const jpeg = Buffer.from('fake image');
   step = await ask({ goal: 'open Calculator and work out 12 times 8', app: 'Calculator', title: 'Calculator' });
   check(calls.length === 1, 'once it is in front, the goal goes on to the AI');
   check(step.action === 'type' && step.text === '12*8=', `"keys" that aren't a shortcut are typed instead (${step.action} ${step.text})`);
+  check(brain.localCodeGoal('open vscode and write a calculator program') && brain.localCodeGoal('write bubble sort in python') && brain.localCodeGoal('make a stack in c++') && !brain.localCodeGoal('write an email') && !brain.localCodeGoal('make a snake game website'), 'code goals are recognised, with or without the word code');
   check(!brain.firstApp('open the File menu and save') && !brain.firstApp('open youtube and play music') && brain.firstApp('open VS Code, then write code') === 'VS Code' && brain.firstApp('open my Chrome') === 'Chrome', 'only well-known apps count, whatever follows them');
   plan = { 'gemini-3.6-flash': [{ reply: geminiAnswer({ status: 'step', action: 'key', text: 'Enter', instruction: 'Press Enter' }) }] };
   step = await ask({ goal: 'confirm it' });
@@ -460,6 +470,32 @@ const jpeg = Buffer.from('fake image');
   });
   const lost = await brain.chat({ goal: 'hi', onText: () => {} }).catch((e) => e);
   check(lost instanceof Error && chatCalls.length === 1, 'chat: cut off half way, it stops there instead of starting the answer again');
+
+  // Files added with the folder button.
+  chatCalls = [];
+  brain.useFetch(async (url, options = {}) => {
+    if (url.includes('/models?')) return modelList;
+    chatCalls.push(JSON.parse(options.body));
+    return streamed([sse('Seen.')]);
+  });
+  await brain.chat({ goal: 'what is this', attachments: [{ name: 'a.png', mime: 'image/png', data: 'AAAA' }, { name: 'q.pdf', mime: 'application/pdf', data: 'BBBB' }, { name: 'n.txt', mime: 'text/plain', text: 'my notes' }] });
+  const sentParts = chatCalls[0].contents[0].parts;
+  check(sentParts[0].inlineData.mimeType === 'image/png' && sentParts[1].inlineData.mimeType === 'application/pdf', 'files: images and PDFs go to Gemini as they are');
+  check(sentParts.length === 3 && /File "n\.txt":\nmy notes/.test(sentParts[2].text) && /what is this/.test(sentParts[2].text), 'files: a text file goes inside the message, with its name');
+
+  brain.useFetch(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); });
+  brain.useLocalFetch(async (url) => { if (url.endsWith('/api/tags')) return reply(200, { models: [{ name: 'lefty-vision:latest' }] }); throw new Error('should not be asked'); });
+  const noPdf = await brain.chat({ goal: 'read it', attachments: [{ name: 'q.pdf', mime: 'application/pdf', data: 'BBBB' }] }).catch((e) => e);
+  check(noPdf.pdf === true, 'files offline: a PDF says it needs the internet');
+  brain.useFetch(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); });
+  let localImages = null;
+  brain.useLocalFetch(async (url, options) => {
+    if (url.endsWith('/api/tags')) return reply(200, { models: [{ name: 'lefty-vision:latest' }] });
+    localImages = JSON.parse(options.body).messages[1].images;
+    return streamed([`${JSON.stringify({ message: { content: 'A cat' } })}\n`]);
+  });
+  await brain.chat({ goal: 'what is this', attachments: [{ name: 'a.png', mime: 'image/png', data: 'AAAA' }] });
+  check(localImages && localImages[0] === 'AAAA', 'files offline: a picture goes to the local vision model');
 
   brain.useFetch(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); });
   const localPieces = [];

@@ -132,8 +132,8 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 .lefty.listening .lefty-body { animation: listen 1.2s ease-in-out infinite; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.chips button { font-size: 12px; padding: 5px 10px; border-radius: 99px; background: rgba(255,247,237,.95); color: #7C5A33; box-shadow: 0 4px 12px -6px rgba(15,23,42,.45); }
-.chips button:hover { background: #FDE7CC; }
+.chips button { font-size: 12px; padding: 5px 10px; border-radius: 99px; background: rgba(240,253,250,.95); color: #0F766E; box-shadow: 0 4px 12px -6px rgba(15,23,42,.45); }
+.chips button:hover { background: #CCFBF1; }
 
 @keyframes pop { 0% { opacity: 0; transform: scale(.2) rotate(-25deg); } 100% { opacity: 1; transform: scale(1) rotate(0); } }
 @keyframes pop-in { 0% { opacity: 0; transform: scale(.7) translateY(8px); } 100% { opacity: 1; transform: none; } }
@@ -152,7 +152,7 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 /* A question with answer buttons in Lefty's chat ("VS Code isn't open. Shall I open it?") */
 .msg .choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .msg .choices button { font-size: 13px; padding: 5px 12px; border-radius: 99px; background: #fff; color: #0F3D39; border: 1px solid #99F6E4; cursor: pointer; }
-.msg .choices button.primary { background: #0D9488; color: #fff; border-color: #0D9488; }
+.msg .choices button.primary { background: #0F766E; color: #fff; border-color: #0F766E; }
 .msg .choices button:hover { filter: brightness(0.95); }
 .msg .choices button:disabled { opacity: .5; cursor: default; }
 
@@ -166,7 +166,7 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 .ghost .gline.enter { color: #5EEAD4; opacity: .85; }
 .ghost.light .gline { color: rgba(13,148,136,.55); }
 .ghost.light .gline.current { color: rgba(13,148,136,.75); }
-.ghost.light .gline .next, .ghost.light .gline.enter { color: #0D9488; }
+.ghost.light .gline .next, .ghost.light .gline.enter { color: #0F766E; }
 
 /* Code shown in the chat when ghost code can't be drawn (an editor Lefty can't follow) */
 .msg.has-code { max-width: 100%; }
@@ -177,9 +177,9 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 /* A small answer box inside a message (e.g. the folder for a coding workspace) */
 .namebox { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .namebox input { flex: 1 1 100%; min-width: 0; padding: 5px 9px; border: 1px solid #99F6E4; border-radius: 8px; font: inherit; font-size: 13px; color: inherit; background: #fff; outline: none; user-select: text; }
-.namebox input:focus { border-color: #0D9488; box-shadow: 0 0 0 3px rgba(20,184,166,.18); }
+.namebox input:focus { border-color: #0F766E; box-shadow: 0 0 0 3px rgba(20,184,166,.18); }
 .namebox button { white-space: nowrap; font-size: 13px; padding: 5px 10px; border-radius: 99px; background: #fff; color: #0F3D39; border: 1px solid #99F6E4; }
-.namebox button.primary { background: #0D9488; color: #fff; border-color: #0D9488; }
+.namebox button.primary { background: #0F766E; color: #fff; border-color: #0F766E; }
 .namebox button:disabled { opacity: .5; cursor: default; }
 
 /* "What does this do?": a dashed teal ring on the control and Lefty's explanation beside it. Never catches clicks. */
@@ -214,3 +214,16 @@ button { font: inherit; cursor: pointer; border: none; background: none; color: 
 .access-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid rgba(15,61,57,.18); border-radius: 13px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
 .access-btn:hover { background: rgba(20,184,166,.12); }
 .access-btn.full { color: #B91C1C; border-color: #FCA5A5; }
+
+/* The bubble's typing box matches the main window: white, a thin line, a teal send button. */
+.ask { background: #fff; border-color: #B5D9D4; border-radius: 12px; color: #1E293B; box-shadow: 0 12px 28px -12px rgba(20,184,166,.5); }
+.ask:focus-within { border-color: #14B8A6; box-shadow: 0 0 0 3px rgba(20,184,166,.16); }
+.ask input::placeholder { color: #64748B; }
+.ask button { border-radius: 8px; background: #0D9488; color: #fff; }
+.ask button:hover { background: #0F766E; }
+.ask button.mic { color: #0F766E; }
+.ask button.mic:hover { background: #E6F6F4; }
+.steptag { background: #0F766E; }
+.steptag .count { color: #CCFBF1; }
+.msg.user-msg { background: #0D9488; }
+.msg.lefty-msg { color: #1E293B; }

@@ -192,6 +192,23 @@
     return `${stem}.${extensionFor(lang) || 'txt'}`;
   }
 
+  // The first line of a file the user is going to type: a comment naming it. VS Code reports no cursor in a
+  // completely empty file, so ghost code has nowhere to draw until there is a line of text.
+  function starterLine(file) {
+    const [, stem = 'code', ext = ''] = String(file || '').match(/^(.*?)(?:\.(\w+))?$/) || [];
+    const name = stem.replace(/[-_]+/g, ' ').trim();
+    const kind = ext.toLowerCase();
+    if (['py', 'rb', 'sh', 'r', 'pl'].includes(kind)) return `# ${name}`;
+    if (['sql', 'lua'].includes(kind)) return `-- ${name}`;
+    if (kind === 'html') return `<!-- ${name} -->`;
+    if (kind === 'css') return `/* ${name} */`;
+    return `// ${name}`;
+  }
+
+  // "write it here", "add this to the current file": the user means the work they have open, not a new folder.
+  const OPEN_WORK = /\b(?:here|this (?:file|folder|project|tab|window)|(?:the|my) (?:open|same|existing|current) (?:file|folder|project|tab|window)|(?:current|existing) (?:file|folder|project|tab|window))\b/i;
+  const meansOpenWork = (goal) => OPEN_WORK.test(String(goal || ''));
+
   // Whether the cursor can be put on an exact column, or only on the line (the editor's Go To box takes a line).
   const canGotoColumn = (process) => findOrGeneric(process).goto === 'line-col';
 
@@ -223,7 +240,7 @@
   }
 
   const api = { find, findOrGeneric, fromTitle, fromAppName, isCodeEditor, describe, isKnown, gotoKeys, canGotoColumn,
-    newFileKeys, canNewFile, fileName, extensionFor, settingsFolder, fontOf, EDITORS, GENERIC };
+    newFileKeys, canNewFile, fileName, starterLine, meansOpenWork, extensionFor, settingsFolder, fontOf, EDITORS, GENERIC };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.LeftyEditors = api;
 })(this);

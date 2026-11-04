@@ -178,8 +178,22 @@ async function enterHome() {
 /* ---------- Settings: Learn / Do it, size, talking and private apps (kept by the main process, shared with the overlay) ---------- */
 let privateApps = [];
 
+const ACCESS_LABEL = { ask: 'Ask', auto: 'Auto', full: 'Full' };
+const NEXT_ACCESS = { ask: 'auto', auto: 'full', full: 'ask' };
+const MODE_NOTE = {
+  learn: 'Lefty points and you make the moves.',
+  auto: 'Lefty plans and makes the moves for you.',
+};
+let currentAccess = 'auto';
+
 function showSettings(settings) {
-  for (const [id, value] of [['pref-mode', settings.mode], ['pref-access', settings.access], ['pref-size', settings.size], ['pref-speak', settings.speak]]) {
+  currentAccess = settings.access || 'auto';
+  $('composer-access').querySelector('span').textContent = ACCESS_LABEL[currentAccess];
+  $('composer-access').classList.toggle('full', currentAccess === 'full');
+  $('mode-note').textContent = MODE_NOTE[settings.mode] || MODE_NOTE.learn;
+  $('brain-pick').value = settings.brain || 'auto';
+  showBrainStatus();
+  for (const [id, value] of [['pref-mode', settings.mode], ['composer-mode', settings.mode], ['pref-access', settings.access], ['pref-size', settings.size], ['pref-speak', settings.speak]]) {
     $(id).querySelectorAll('button').forEach((b) => {
       const on = b.dataset.value === value;
       b.classList.toggle('on', on);
@@ -191,14 +205,14 @@ function showSettings(settings) {
 }
 
 const SETTING_TOASTS = {
-  mode: (now) => (now.mode === 'auto' ? 'Do it: Lefty clicks and types for you. Esc stops him.' : 'Learn: Lefty points and you click.'),
+  mode: (now) => (now.mode === 'auto' ? 'Do it: Lefty clicks and types for you. Stop is beside him while he works.' : 'Learn: Lefty points and you click.'),
   speak: (now) => (now.speak === 'on' ? 'Lefty will read his answers out loud.' : 'Lefty is quiet now.'),
 };
 
 if (api.getSettings) {
   api.getSettings().then(showSettings).catch(() => {});
   api.onSettings(showSettings);
-  for (const [id, key] of [['pref-mode', 'mode'], ['pref-access', 'access'], ['pref-size', 'size'], ['pref-speak', 'speak']]) {
+  for (const [id, key] of [['pref-mode', 'mode'], ['composer-mode', 'mode'], ['pref-access', 'access'], ['pref-size', 'size'], ['pref-speak', 'speak']]) {
     $(id).querySelectorAll('button').forEach((b) => {
       b.addEventListener('click', async () => {
         const now = await api.setSettings({ [key]: b.dataset.value });
@@ -432,6 +446,7 @@ function showNewChat() {
   $('thread').hidden = true;
   $('thread').replaceChildren();
   $('welcome').hidden = false;
+  showPills(false);
   if (chats.length) renderChats();
 }
 
@@ -465,14 +480,100 @@ function refresh() {
   refreshTimer = setTimeout(async () => { await loadChats(); showThread(); loadUsage(); }, 250);
 }
 
+async function showBrainStatus() {
+  if (!api.brainStatus) return;
+  $('brain-status').textContent = await api.brainStatus().catch(() => 'No AI connected');
+}
+
+/* The folder button: pick something, and it waits above the box until the message is sent. */
+let attachments = [];
+const MAX_ATTACHED = 4;
+
+function showAttached() {
+  $('attached').hidden = !attachments.length;
+  $('attached').replaceChildren(...attachments.map((file, i) => {
+    const chip = document.createElement('span');
+    const name = document.createElement('b');
+    name.textContent = file.name;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', `Remove ${file.name}`);
+    remove.addEventListener('click', () => { attachments.splice(i, 1); showAttached(); });
+    chip.append(name, remove);
+    return chip;
+  }));
+}
+
+// Hovering the folder shows what can be added, and moving away puts it back. A click keeps it open until the next
+// click, Esc, or a click anywhere else. The short wait lets the mouse cross the gap between the folder and the pills.
+const PILLS_LINGER_MS = 220;
+let pillsPinned = false;
+let pillsTimer = null;
+
+function showPills(open, { pinned = false } = {}) {
+  clearTimeout(pillsTimer);
+  pillsPinned = open && pinned;
+  $('attach-pills').hidden = !open;
+  $('attach').setAttribute('aria-expanded', String(open));
+}
+
+$('attach-wrap').addEventListener('mouseenter', () => { if (!pillsPinned) showPills(true); });
+$('attach-wrap').addEventListener('mouseleave', () => {
+  if (pillsPinned) return;
+  clearTimeout(pillsTimer);
+  pillsTimer = setTimeout(() => showPills(false), PILLS_LINGER_MS);
+});
+$('attach').addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (pillsPinned) showPills(false);
+  else showPills(true, { pinned: true });
+});
+document.addEventListener('click', () => showPills(false));
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') showPills(false); });
+
+document.querySelectorAll('[data-attach]').forEach((pill) => {
+  pill.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    showPills(false);
+    if (attachments.length >= MAX_ATTACHED) { toast(`You can add ${MAX_ATTACHED} things to a message.`); return; }
+    if (!api.attachPick) { toast('This works inside the app.'); return; }
+    const kind = pill.dataset.attach;
+    const file = await (kind === 'screen' ? api.attachScreen() : api.attachPick(kind)).catch(() => ({ ok: false, error: "I couldn't add that." }));
+    if (file.ok) {
+      attachments.push({ name: file.name, mime: file.mime, data: file.data, text: file.text });
+      showAttached();
+      composerInput.focus();
+    } else if (file.error) toast(file.error);
+  });
+});
+
 function send(text) {
   const goal = String(text || '').trim();
-  if (!goal) return;
+  if (!goal && !attachments.length) return;
   if (!api.homeAsk) { toast('Lefty answers here when running inside the app.'); return; }
-  if (currentChat) $('thread').append(bubble(goal, 'user'));
+  const added = attachments;
+  if (currentChat) $('thread').append(bubble(added.length ? `${goal}\n[Added: ${added.map((a) => a.name).join(', ')}]`.trim() : goal, 'user'));
   else waitingForNew = true;
-  api.homeAsk({ goal, chatId: currentChat });
+  attachments = [];
+  showAttached();
+  showPills(false);
+  api.homeAsk({ goal, chatId: currentChat, attachments: added });
 }
+
+$('composer-access').addEventListener('click', async () => {
+  const next = NEXT_ACCESS[currentAccess];
+  showSettings(await api.setSettings({ access: next }));
+  toast({ ask: 'Ask every time: a yes before every move.', auto: 'Auto: a yes before risky moves only.', full: "Full access: no questions, even before deleting. Passwords and card numbers stay yours." }[next]);
+});
+$('brain-pick').addEventListener('change', async (event) => {
+  showSettings(await api.setSettings({ brain: event.target.value }));
+  toast(event.target.value === 'local' ? 'Every answer now stays on this PC.' : 'Gemini answers, and the local model takes over offline.');
+});
+const setSidebar = (hidden) => { document.querySelector('.home').classList.toggle('collapsed', hidden); $('expand').hidden = !hidden; store.set('lefty.sidebarHidden', hidden); };
+$('collapse').addEventListener('click', () => setSidebar(true));
+$('expand').addEventListener('click', () => setSidebar(false));
+if (store.get('lefty.sidebarHidden')) setSidebar(true);
 
 /* An answer in the main page, word by word. While it's being written the thread is left alone: a reload from the
    history would wipe the words already on the page. */
@@ -536,7 +637,7 @@ $('composer').addEventListener('submit', (event) => {
 document.querySelectorAll('[data-try]').forEach((b) => b.addEventListener('click', () => { composerInput.value = b.dataset.try; fitComposer(); composerInput.focus(); }));
 $('new-chat').addEventListener('click', () => { showNewChat(); composerInput.focus(); });
 if (api.onChatsChanged) api.onChatsChanged(refresh);
-window.addEventListener('focus', refresh); // back from Lefty's work: the chat has his answers now
+window.addEventListener('focus', () => { refresh(); showBrainStatus(); }); // back from Lefty's work: the chat has his answers now
 
 /* ---------- Settings: in place of the chat ---------- */
 function openSettings() { $('settings-main').hidden = false; document.querySelector('.home-main').hidden = true; }

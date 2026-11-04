@@ -1,13 +1,17 @@
 // Checks Lefty's ghost code tracker: from the text cursor's line and column alone, which code line the user is on and
 // what is left to type, including the editor's own auto-indent. Run: npm run test:ghost
 
-const { track } = require('../src/overlay/ghost');
+const { track, columnOneX } = require('../src/overlay/ghost');
 
 let failed = 0;
 function check(condition, message) {
   if (!condition) failed += 1;
   console.log(`${condition ? 'ok  ' : 'FAIL'} ${message}`);
 }
+
+// VS Code reports the cursor, not the line: the code must not be pushed along by what has been typed.
+check([1, 2, 10, 40].every((col) => columnOneX({ x: 100 + (col - 1) * 8, w: 1 }, col, 8) === 100), 'a cursor-sized rect still finds column 1, wherever the cursor is');
+check(columnOneX({ x: 100, w: 600 }, 20, 8) === 100, 'a rect for the whole line already starts at column 1');
 
 const code = [
   'class Node:',

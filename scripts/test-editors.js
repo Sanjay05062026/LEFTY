@@ -212,6 +212,9 @@ check(editors.canNewFile('some-editor-nobody-listed'), 'an unlisted editor still
 
 // --- naming the file ---
 check(editors.fileName('linear_search.py', { lang: 'python' }) === 'linear_search.py', "the brain's own name is kept");
+check(editors.starterLine('bubble_sort.py') === '# bubble sort' && editors.starterLine('Stack.java') === '// Stack' && editors.starterLine('query.sql') === '-- query' && editors.starterLine('page.html') === '<!-- page -->' && editors.starterLine('site.css') === '/* site */', 'a file to type into starts with a comment in its own language');
+check(['write it here', 'add a function to this file', 'put it in the current project', 'use my open folder'].every(editors.meansOpenWork), 'the words for work already open are recognised');
+check(!['write a calculator program', 'open vscode and write bubble sort', 'open a new folder and write code', 'write it in a new file', ''].some(editors.meansOpenWork), 'everything else gets a new folder');
 check(editors.fileName('D:/work/thing.js', { lang: 'javascript' }) === 'thing.js', 'a path is cut down to the name');
 check(editors.fileName('', { lang: 'python', fallback: 'open pycharm and write ghost code for linear search in python' })
   === 'linear-search.py', 'no name given: the goal names it, without the orders or the editor');

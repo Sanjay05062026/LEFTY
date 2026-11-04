@@ -110,7 +110,7 @@ input { font: inherit; color: inherit; }
 .btn-allow:hover:not(:disabled) { background: #F8FAFC; }
 .btn-allow:disabled { cursor: default; }
 .perm.allowed .btn-allow { border-color: transparent; background: var(--teal-soft); color: var(--teal-dark); }
-.privacy { margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: #FFF4E6; font-size: 13px; color: #7C5A33; }
+.privacy { margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: #FFF4E6; font-size: 13px; color: #0F766E; }
 .perms-actions { display: flex; justify-content: space-between; margin-top: 20px; }
 
 /* ---------- Home ---------- */
@@ -252,8 +252,8 @@ button.tip:hover { border-color: var(--teal); transform: translateY(-2px); }
 .btn-small { padding: 7px 14px; border-radius: 9px; font-weight: 600; font-size: 13px; background: var(--ink); color: #fff; }
 .btn-small:hover { background: #0F172A; }
 .private-suggest { margin-top: 10px; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.private-suggest button { padding: 3px 10px; border-radius: 99px; background: #FFF4E6; color: #7C5A33; font-size: 12px; }
-.private-suggest button:hover { background: #FDE7CC; }
+.private-suggest button { padding: 3px 10px; border-radius: 99px; background: #FFF4E6; color: #0F766E; font-size: 12px; }
+.private-suggest button:hover { background: #CCFBF1; }
 .private-suggest button:disabled { opacity: .45; cursor: default; }
 
 /* ---------- Toast ---------- */
@@ -273,3 +273,146 @@ button.tip:hover { border-color: var(--teal); transform: translateY(-2px); }
 .task-status[hidden] { display: none; }
 .task-status i { width: 8px; height: 8px; border-radius: 50%; background: #14B8A6; animation: task-pulse 1.2s ease-in-out infinite; }
 @keyframes task-pulse { 50% { opacity: .3; } }
+
+/* ---------- Lefty's look: white panels, his own teal for everything he does. It sits last so it wins over the rules above. ---------- */
+:root {
+  --bg: #F1F8F7; --panel: #FFFFFF; --card: #FFFFFF; --raised: #E6F6F4; --ink: #1E293B; --muted: #64748B;
+  --line: #DDEBE9; --line-strong: #B5D9D4; --accent: #0D9488; --accent-dark: #0F766E; --teal: #14B8A6; --teal-dark: #0F766E; --teal-soft: #CCFBF1;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-dark); }
+.btn-primary:disabled { background: #C9D8F0; color: #fff; }
+.btn-primary.loading::after { border-color: rgba(255,255,255,.35); border-top-color: #fff; }
+.btn-outline:hover { background: var(--raised); border-color: var(--line-strong); }
+.btn-ghost:hover { background: var(--raised); color: var(--ink); }
+.field input { background: var(--raised); }
+.auth-card, .perms-card { box-shadow: none; }
+.perm.allowed { border-color: #99F6E4; background: #F0FDFA; }
+.perm-icon { background: var(--raised); }
+.tag { background: #FEE2E2; color: #B91C1C; }
+.tag.optional { background: var(--raised); }
+.btn-allow { border-color: var(--line-strong); }
+.btn-allow:hover:not(:disabled) { background: var(--raised); }
+.privacy { background: var(--raised); color: var(--muted); }
+
+.home { padding: 12px; gap: 12px; background: var(--bg); }
+.home.collapsed .sidebar { display: none; }
+.sidebar { width: 268px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; gap: 8px; padding: 14px 12px; min-height: 0; }
+.brand { padding: 2px 4px 8px; font-size: 16px; font-weight: 600; }
+.brand .icon-btn { margin-left: auto; }
+.logo-tile { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--raised); }
+.logo-tile img { width: 17px; }
+.logo-tile.big { width: 44px; height: 44px; border-radius: 9px; margin-bottom: 16px; }
+.logo-tile.big img { width: 25px; }
+.icon-btn { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 8px; color: var(--muted); }
+.icon-btn:hover { background: var(--raised); color: var(--ink); }
+.btn-new { justify-content: center; background: var(--accent); color: #fff; border: none; padding: 9px 14px; border-radius: 8px; font-weight: 500; }
+.btn-new:hover { background: var(--accent-dark); }
+.side-label { font-size: 12px; font-weight: 500; margin: 8px 6px 0; }
+.chat-item:hover, .chat-item.on { background: var(--raised); }
+.chat-item .open { font-size: 13.5px; color: var(--ink); }
+.chat-item .del:hover { background: #FEE2E2; color: #B91C1C; }
+.chat-list { flex: 1 1 0; min-height: 60px; overflow-x: hidden; }
+.side-group summary { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; font-size: 13.5px; color: var(--ink); cursor: pointer; list-style: none; }
+.side-group summary::-webkit-details-marker { display: none; }
+.side-group summary:hover { background: var(--raised); }
+.side-group[open] summary { margin-bottom: 6px; }
+.focus-card { display: block; }
+.focus-form input { background: var(--raised); border-color: var(--line); color: var(--ink); }
+.focus-form input:focus { border-color: var(--line-strong); }
+.focus-start { background: var(--accent); color: #fff; }
+.focus-stop { background: #FEE2E2; color: #B91C1C; }
+.storage { background: transparent; border: none; padding: 2px 8px; }
+.storage-bar { background: var(--raised); }
+.side-bottom { gap: 2px; padding-top: 4px; }
+.side-item { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--ink); padding: 7px 8px; }
+.side-item:hover { background: var(--raised); }
+.user-chip { background: transparent; border: none; border-top: 1px solid var(--line); border-radius: 0; margin-top: 6px; padding: 10px 6px 2px; }
+.avatar { background: transparent; color: var(--ink); border: 1px solid var(--line-strong); font-size: 12px; font-weight: 500; }
+.user-meta strong { font-weight: 500; }
+
+.home-main, .settings-main { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; min-height: 0; overflow: hidden; }
+.chat-head { border-bottom: none; padding: 12px 14px; min-height: 56px; gap: 10px; }
+.chat-head h2 { font-size: 13.5px; font-weight: 400; color: var(--muted); }
+.picker { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; flex: none; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 13.5px; }
+.picker:hover { border-color: var(--line-strong); }
+.picker select { border: none; outline: none; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.picker option { background: var(--raised); color: var(--ink); }
+.status { background: transparent; color: var(--muted); border-color: var(--line); font-weight: 400; }
+.status.warn { background: transparent; color: #C2410C; border-color: #FED7AA; }
+.chat-scroll { min-height: 0; }
+.welcome { margin: 0; align-self: center; }
+.welcome h1 { font-size: 25px; font-weight: 500; margin-bottom: 6px; }
+.lead { font-size: 14px; }
+.keycaps kbd { background: var(--raised); color: var(--ink); border-color: var(--line); border-bottom-width: 1px; font-weight: 500; font-size: 12px; padding: 2px 7px; }
+
+/* A new chat: the box sits in the middle, under "How can I help?". Once there are messages it drops to the bottom. */
+.home-main:has(#welcome:not([hidden])) .chat-scroll { flex: 1 1 0; justify-content: flex-end; padding-bottom: 22px; overflow: visible; }
+.home-main:has(#welcome:not([hidden])) .small-print { flex: 1 1 0; display: flex; align-items: flex-end; justify-content: center; }
+.home-main:has(#welcome:not([hidden])) .quick { display: grid; }
+
+.composer { display: block; max-width: 720px; width: calc(100% - 56px); margin: 0 auto; padding: 12px 12px 10px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: none; flex: none; }
+.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(20,184,166,.14); }
+.composer textarea { display: block; width: 100%; font-size: 15px; padding: 2px 4px 12px; min-height: 58px; color: var(--ink); }
+.composer textarea::placeholder { color: var(--muted); }
+.composer-row { display: flex; align-items: center; gap: 8px; }
+.composer button { width: auto; height: auto; background: none; color: inherit; border-radius: 8px; }
+.composer button:hover { background: none; }
+.composer .row-gap { flex: 1; }
+.composer .tool { width: 34px; height: 34px; display: grid; place-items: center; color: var(--accent); }
+.composer .tool:hover, .composer .tool[aria-expanded="true"] { background: var(--raised); color: var(--accent-dark); }
+.mode-seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--raised); }
+.composer .mode-seg button { padding: 5px 13px; font-size: 13.5px; color: var(--muted); border-radius: 7px; }
+.composer .mode-seg button:hover { color: var(--ink); }
+.composer .mode-seg button.on { background: var(--accent); color: #fff; }
+.composer .chip-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 9px; font-size: 13.5px; color: var(--ink); }
+.composer .chip-btn:hover { background: var(--raised); }
+.composer .chip-btn.full { color: #DC2626; }
+.composer .send { width: 36px; height: 36px; display: grid; place-items: center; background: #B5D9D4; color: #fff; }
+.composer .send:hover { background: var(--accent-dark); }
+.composer:has(textarea:not(:placeholder-shown)) .send, .composer:has(#attached:not([hidden])) .send { background: var(--accent); }
+
+/* The folder button: what can be added fans out above it, like notes out of a folder. */
+.attach-wrap { position: relative; }
+.attach-pills { position: absolute; left: -6px; bottom: 46px; width: 340px; height: 112px; z-index: 5; }
+.composer .attach-pills button { position: absolute; padding: 9px 17px; border-radius: 99px; background: #fff; color: var(--accent-dark); border: 1px solid var(--line-strong); font-size: 14px; white-space: nowrap; box-shadow: 0 10px 24px -10px rgba(20,184,166,.55); animation: pill-out .32s cubic-bezier(.34,1.5,.64,1) backwards; transition: transform .15s; }
+.composer .attach-pills button:hover { background: var(--accent); color: #fff; transform: var(--tilt) translateY(-3px) scale(1.03); }
+.attach-pills button:nth-child(1) { left: 0; top: 58px; --tilt: rotate(-5deg); transform: var(--tilt); }
+.attach-pills button:nth-child(2) { left: 16px; top: 8px; --tilt: rotate(-4deg); transform: var(--tilt); animation-delay: .04s; }
+.attach-pills button:nth-child(3) { left: 158px; top: 12px; --tilt: rotate(4deg); transform: var(--tilt); animation-delay: .08s; }
+.attach-pills button:nth-child(4) { left: 150px; top: 62px; --tilt: rotate(5deg); transform: var(--tilt); animation-delay: .12s; }
+@keyframes pill-out { from { opacity: 0; transform: translateY(26px) scale(.6) rotate(0); } }
+.attached { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 10px; }
+.attached span { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 6px 4px 10px; border-radius: 8px; background: var(--raised); font-size: 13px; }
+.attached b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer .attached button { width: 20px; height: 20px; border-radius: 5px; color: var(--muted); font-size: 13px; line-height: 1; }
+.composer .attached button:hover { background: var(--line-strong); color: var(--ink); }
+
+.composer-hint { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; max-width: 720px; width: calc(100% - 56px); margin: 0 auto; padding: 9px 4px 0; text-align: left; font-size: 12.5px; flex: none; }
+.composer-hint kbd { font: 11.5px Consolas, monospace; color: var(--ink); padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--raised); }
+.quick { display: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-width: 720px; width: calc(100% - 56px); margin: 14px auto 0; flex: none; }
+.quick-card { display: flex; align-items: center; gap: 10px; padding: 11px 14px; text-align: left; font-size: 14.5px; color: var(--ink); border: 1px solid var(--line); border-radius: 9px; transition: border-color .15s, background .15s; }
+.quick-card span { flex: 1; }
+.quick-card i { font-style: normal; color: var(--muted); }
+.quick-card:hover { border-color: var(--line-strong); background: var(--card); }
+.small-print { flex: none; text-align: center; font-size: 12.5px; color: var(--muted); padding: 14px 20px 12px; }
+.task-status { max-width: 720px; }
+
+.thread { max-width: 720px; }
+.bubble-msg.user { background: var(--accent); color: #fff; }
+.bubble-msg.lefty { background: transparent; border: none; border-left: 2px solid var(--teal); border-radius: 0; color: var(--ink); max-width: 92%; }
+.thread-note { background: var(--raised); }
+.seg { background: var(--raised); }
+.seg button.on { background: var(--accent); color: #fff; box-shadow: none; }
+.pref, .privacy-card { background: var(--card); }
+.app-chip { background: var(--teal-soft); border-color: #99F6E4; }
+.app-chip button:hover { background: #99F6E4; }
+.private-add select, .private-add input { background: var(--raised); color: var(--ink); }
+.btn-small { background: var(--accent); color: #fff; }
+.btn-small:hover { background: var(--accent-dark); }
+.private-suggest button { background: var(--raised); color: var(--muted); }
+.private-suggest button:hover { background: var(--line-strong); }
+.toast { background: var(--ink); color: #fff; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 8px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }

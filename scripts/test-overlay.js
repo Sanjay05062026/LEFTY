@@ -109,6 +109,19 @@ check(/Number\(front\.hwnd\) === Number\(hwnd\)/.test(save),
   'the file name is typed only when a Save window of its own opened');
 check(/return false/.test(save), 'no dialog: the name is never typed into the code');
 
+// --- a program gets a new folder, and opening VS Code is not a question ---
+const openAppCode = overlay.slice(overlay.indexOf('async function openApp'), overlay.indexOf('function appOpened'));
+check(/if \(settings\.access !== 'ask'\) \{/.test(openAppCode) && !/autoOn\(\)/.test(openAppCode), 'an app opens without a question in both modes, and only the Ask level checks');
+const startCode = overlay.slice(overlay.indexOf('async function startCode'), overlay.indexOf('async function writeCode'));
+check(/meansOpenWork\(job\.goal\)/.test(startCode), '"write it here" stays in the work that is open');
+check(/code: writing \? decision\.code : ''/.test(startCode), 'Learn mode leaves the new file empty, for the user to type');
+check(/if \(!made\.ok\) \{[^\n]*inPlace\(\)/.test(startCode), 'no new folder possible: the older paths still work');
+check(/decision\.kind === 'code'\) \{ job\.thinking = false; startCode\(decision\)/.test(overlay), 'every code step goes through the new folder');
+const codeFolder = main.slice(main.indexOf("ipcMain.handle('code:folder'"), main.indexOf('/* ---------- The app a goal is about'));
+check(/freshFolder\(/.test(codeFolder), 'it never reuses a folder with files in it');
+check(/'code', '-n', folder, full/.test(codeFolder), 'VS Code opens it in a window of its own, not the project already open');
+check(/'another-editor'/.test(codeFolder) && codeFolder.indexOf("'another-editor'") < codeFolder.indexOf('mkdirSync'), 'another editor in front keeps the job, and nothing is made first');
+
 // --- what the user is told ---
 check(/no-new-file/.test(overlay), 'the overlay has an answer for an editor that cannot make a file');
 check(/won't write into the file you have open/.test(overlay), 'and it says why, in plain words');

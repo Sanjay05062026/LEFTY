@@ -394,8 +394,9 @@ function showThinking() {
   setStepTag('', !started ? 'Looking at your screen…' : autoOn() ? 'Checking what changed…' : 'Thinking…');
 }
 
-// The goal is about another app ("...in VS Code", asked from the desktop): switch to it if it's open, or ask
-// before opening it - opening an app is the user's call. Then the goal carries on in that app.
+// The goal is about another app ("...in VS Code", asked from the desktop): switch to it if it's open, or open it.
+// Opening an app is harmless and it is what the goal needs, so only the Ask level stops to check, in either mode.
+// Then the goal carries on in that app.
 async function openApp(decision) {
   if (job.opening === decision.id) return; // already on it (the watch keeps re-deciding the same step)
   const thisJob = job;
@@ -412,9 +413,9 @@ async function openApp(decision) {
     stopGuide(`I can't find ${decision.app} on this PC. If it's installed, open it and call me again.`);
     return;
   }
-  if (autoOn() && settings.access !== 'ask') { // Do it mode: opening an app is harmless, so Lefty just does it
+  if (settings.access !== 'ask') {
     setStepTag('', `Opening ${found.app}…`);
-    api.log(`do it: opening ${found.app}`);
+    api.log(`opening ${found.app}`);
     const launched = await api.launchApp({ app: found.app, appId: found.appId, want: decision.app });
     if (job !== thisJob) return;
     if (launched.ok) appOpened(thisJob, decision, launched.app);
@@ -788,6 +789,31 @@ function resumeAuto(thisJob, mode) {
   reconsider({ type: 'resumed' });
 }
 
+// Code gets a new folder and a VS Code window of its own, so nothing lands in the project already open. Do it mode
+// writes the file there; Learn mode leaves it empty and draws the code to type over. "Add this here" stays in the
+// open work, and so does another editor the user is in: main says so and the older paths below take over.
+async function startCode(decision) {
+  if (job.coding === decision.id || (job.ghost && job.ghost.id === decision.id)) return;
+  const inPlace = () => { job.coding = null; if (autoOn()) writeCode(decision); else startGhost(decision); };
+  if (LeftyEditors.meansOpenWork(job.goal)) { inPlace(); return; }
+  const thisJob = job;
+  if (settings.access === 'ask' && job.okFor !== decision.id) { askFirst(thisJob, decision, { ask: "I'm about to make a new folder for this code and open it in VS Code" }, startCode); return; }
+  const writing = autoOn();
+  job.coding = decision.id;
+  job.decision = decision;
+  ring.classList.remove('show', 'hit', 'error');
+  api.setTarget(null);
+  retreatToCorner();
+  setStepTag('', 'Making a new folder…');
+  const name = LeftyEditors.fileName('', { fallback: job.goal }).replace(/\.\w+$/, '');
+  const made = await api.codeFolder({ name, file: decision.file, code: writing ? decision.code : '' });
+  if (job !== thisJob) return;
+  if (!made.ok) { api.log(`new folder: ${made.error}; staying in place`); inPlace(); return; }
+  api.log(`new folder: ${made.folder}`);
+  if (!writing) { job.coding = null; startGhost(decision); return; }
+  finish({ done: true, message: `Done. I made a new folder, ${made.name}, put the code in ${made.file} and opened it in VS Code.` });
+}
+
 // Do it mode for code: Lefty writes it into VS Code himself instead of drawing it to type over.
 async function writeCode(decision) {
   if (job.coding === decision.id) return;
@@ -921,7 +947,11 @@ function drawGhost(g, view, caret) {
   setPosition(ghostEl, area.x - screenArea.originX, area.y - screenArea.originY);
   ghostEl.style.width = `${area.w}px`;
   ghostEl.style.height = `${area.h}px`;
-  const left = (col) => caret.line.x - area.x + col * g.charWidth;
+  // Measured once, before typing starts, then held. While they type, the cursor's rect arrives ahead of the status
+  // bar's column, so working it out afresh shakes the code sideways by a letter. Kept relative to the editor, so
+  // moving the window still carries the code with it.
+  if (g.columnOne === undefined || !g.tracker.locked) g.columnOne = LeftyGhost.columnOneX(caret.line, caret.col, g.charWidth) - area.x;
+  const left = (col) => g.columnOne + col * g.charWidth;
   const rowTop = caret.line.y - area.y + (caret.line.h - g.font.lineHeight) / 2;
   const lines = [];
   // VS Code's suggestion list stays readable: ghost lines that would cross it are left out while it's open.
@@ -1035,7 +1065,7 @@ async function showProblem(thisJob) {
   const longest = Math.max(1, ...wrong.map((l) => l.length));
   // The wrong code gets the red ring: from its first character to the end of its longest line.
   const rect = {
-    x: at.line.x + indent * charWidth - 4, y: at.line.y - 1,
+    x: LeftyGhost.columnOneX(at.line, at.col, charWidth) + indent * charWidth - 4, y: at.line.y - 1,
     w: Math.max(2, longest - indent) * charWidth + 8, h: at.line.h * wrong.length + 2,
   };
   drawFix(at, d.metrics, longest + 3, p.fixed);
@@ -1097,7 +1127,7 @@ function drawFix(at, metrics, col, fixed) {
   ghostEl.replaceChildren(...lines.map((line, row) => {
     const el = document.createElement('div');
     el.className = `gline fixline${row === 0 ? ' current' : ''}`;
-    el.style.left = `${at.line.x - area.x + col * metrics.charWidth}px`;
+    el.style.left = `${LeftyGhost.columnOneX(at.line, at.col, metrics.charWidth) - area.x + col * metrics.charWidth}px`;
     el.style.top = `${at.line.y - area.y + (at.line.h - metrics.font.lineHeight) / 2 + row * metrics.font.lineHeight}px`;
     el.textContent = `${row === 0 ? '→ ' : '  '}${line.slice(base)}`;
     return el;
@@ -1223,7 +1253,7 @@ function act(decision, event) {
   }
   if (decision.thinking) { showThinking(); return true; }
   if (decision.kind === 'open') { job.thinking = false; openApp(decision); return true; }
-  if (decision.kind === 'code') { job.thinking = false; if (autoOn()) writeCode(decision); else startGhost(decision); return true; }
+  if (decision.kind === 'code') { job.thinking = false; startCode(decision); return true; }
   if (decision.kind === 'doctor') { startDoctor(job.goal); return true; }
   if (decision.kind === 'focus') { startFocus(decision); return true; }
   if (decision.kind === 'build') { startBuild(decision); return true; }
